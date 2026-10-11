@@ -23,8 +23,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Frontend build
+      - name: Frontend install and build
         working-directory: web
         run: |
           npm install --no-audit --no-fund
           npm run build
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium webkit
+      - name: Playwright UI checks
+        working-directory: web
+        run: npm run test:e2e
