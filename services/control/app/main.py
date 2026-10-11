@@ -22,7 +22,7 @@ class Area(BaseModel):
 class Source(BaseModel):
     name:str=Field(min_length=1,max_length=100);url:str
     kind:str=Field(pattern="^(wms|wmts|wfs|osm|xyz)$");enabled:bool=True;cache_allowed:bool=False
-    interval_minutes:int=Field(default=1440,ge=15);layer:str="";tile_url:str=""
+    interval_minutes:int=Field(default=1440,ge=15);layer:str="";tile_url:str="";capabilities_url:str=""
     provider:str=Field(default="",max_length=200);attribution:str=Field(default="",max_length=500)
     license_url:str=Field(default="",max_length=1000);description:str=Field(default="",max_length=1000);preset_id:str=Field(default="",max_length=100)
 class JobRequest(BaseModel):
@@ -53,6 +53,7 @@ def effective_osm_settings():
 def validate_source_urls(source):
     validate_url(source.url.replace("{z}","0").replace("{x}","0").replace("{y}","0"))
     if source.tile_url:validate_url(source.tile_url.replace("{z}","0").replace("{x}","0").replace("{y}","0"))
+    if source.capabilities_url:validate_url(source.capabilities_url)
     if source.license_url:validate_url(source.license_url)
 
 def install_preset(preset_id):
@@ -154,7 +155,7 @@ def source_capabilities(source_id:str):
     cfg=read_config();source=next((s for s in cfg["sources"] if s["id"]==source_id),None)
     if source is None:raise HTTPException(404,"Source not found")
     if source["kind"] not in ("wms","wmts","wfs"):raise HTTPException(422,"OGC source required")
-    try:return capabilities(source["url"],source["kind"])
+    try:return capabilities(source.get("capabilities_url") or source["url"],source["kind"])
     except Exception as exc:raise HTTPException(502,"OGC capabilities unavailable: "+str(exc)[:160])
 @app.get("/control/schedules")
 def schedules():return schedule_status()
