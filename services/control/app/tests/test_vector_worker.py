@@ -28,6 +28,18 @@ class VectorWorkerTests(unittest.TestCase):
                 extract.unlink();polygon.unlink();log.unlink(missing_ok=True)
             finally:worker.OSM=old
 
+    def test_legacy_queued_job_loads_geometry_from_config(self):
+        import app.store as store,app.worker as worker
+        with tempfile.TemporaryDirectory() as tmp:
+            old_root=store.ROOT
+            try:
+                store.ROOT=Path(tmp)/"config"
+                geom={"type":"Polygon","coordinates":[[[8,48],[9,48],[9,49],[8,48]]]}
+                store.write_config({"areas":[{"id":"a1","name":"Area","geojson":geom}],"sources":[],"styles":[],"settings":{}})
+                resolved,bbox=worker.area_geometry({"area_id":"a1","bbox":[8,48,9,49]})
+                self.assertEqual(resolved,geom);self.assertEqual(bbox,[8,48,9,49])
+            finally:store.ROOT=old_root
+
     def test_vector_payload_carries_validated_geometry(self):
         import app.store as store,app.main as main
         with tempfile.TemporaryDirectory() as tmp:
