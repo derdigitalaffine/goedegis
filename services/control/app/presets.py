@@ -1,7 +1,8 @@
 """Curated official German geodata presets for the internal source manager."""
 
 LICENSE_URL="https://www.govdata.de/dl-de/by-2-0"
-BKG_ATTRIBUTION="© GeoBasis-DE / BKG · dl-de/by-2-0"
+TOPPLUS_ATTRIBUTION='© <a href="https://www.bkg.bund.de">BKG</a> · <a href="https://www.govdata.de/dl-de/by-2-0">dl-de/by-2-0</a> · <a href="https://sgx.geodatenzentrum.de/web_public/gdz/datenquellen/datenquellen_topplusopen.html">Datenquellen</a>'
+VG_ATTRIBUTION='© GeoBasis-DE / <a href="https://www.bkg.bund.de">BKG</a> · <a href="https://www.govdata.de/dl-de/by-2-0">dl-de/by-2-0</a>'
 
 OGC_PRESETS=[
     {
@@ -13,9 +14,9 @@ OGC_PRESETS=[
         "cache_allowed":True,
         "interval_minutes":1440,
         "provider":"Bundesamt für Kartographie und Geodäsie (BKG)",
-        "attribution":BKG_ATTRIBUTION,
+        "attribution":TOPPLUS_ATTRIBUTION,
         "license_url":LICENSE_URL,
-        "description":"Amtliche, deutschlandweite Webkarte TopPlusOpen. Der BKG-Dienst dokumentiert auch Offline-Nutzung unter Quellenvermerk.",
+        "description":"Amtliche, deutschlandweite Webkarte TopPlusOpen. BKG erlaubt Offline-Speicherung unter Quellenvermerk; bei Offline-Nutzung ist zusätzlich der datumsbezogene Datenquellenhinweis zu beachten.",
     },
     {
         "id":"bkg-topplusopen-wmts",
@@ -27,9 +28,9 @@ OGC_PRESETS=[
         "cache_allowed":True,
         "interval_minutes":1440,
         "provider":"Bundesamt für Kartographie und Geodäsie (BKG)",
-        "attribution":BKG_ATTRIBUTION,
+        "attribution":TOPPLUS_ATTRIBUTION,
         "license_url":LICENSE_URL,
-        "description":"TopPlusOpen als WMTS in Web Mercator. Für den Offline-Cache ist eine explizite Tile-Vorlage hinterlegt.",
+        "description":"TopPlusOpen als WMTS in Web Mercator. Für den Offline-Cache ist eine explizite Tile-Vorlage hinterlegt; der datumsbezogene Offline-Quellenvermerk bleibt zu beachten.",
     },
     {
         "id":"bkg-vg250-wms",
@@ -40,7 +41,7 @@ OGC_PRESETS=[
         "cache_allowed":False,
         "interval_minutes":43200,
         "provider":"Bundesamt für Kartographie und Geodäsie (BKG)",
-        "attribution":BKG_ATTRIBUTION,
+        "attribution":VG_ATTRIBUTION,
         "license_url":LICENSE_URL,
         "description":"Amtliche Verwaltungsgebiete Deutschlands (VG250), voreingestellt auf Ländergrenzen. Caching bleibt bewusst deaktiviert.",
     },
@@ -53,7 +54,7 @@ OGC_PRESETS=[
         "cache_allowed":False,
         "interval_minutes":43200,
         "provider":"Bundesamt für Kartographie und Geodäsie (BKG)",
-        "attribution":BKG_ATTRIBUTION,
+        "attribution":VG_ATTRIBUTION,
         "license_url":LICENSE_URL,
         "description":"Amtliche Verwaltungsgebiete Deutschlands (VG250), voreingestellt auf Gemeinden; geeignet für periodische PostGIS-Synchronisierung.",
     },
