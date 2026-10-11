@@ -43,7 +43,7 @@ def enqueue_due(now=None):
             if row and row["next_run"]>now:
                 db.execute("COMMIT");continue
             if not _active(db,"wfs_sync","$.source_id",source["id"]):
-                payload={"url":source["url"],"table":"source_"+source["id"].replace("-","")[:24],"source_id":source["id"]}
+                payload={"url":source["url"],"table":"source_"+source["id"].replace("-","")[:24],"source_id":source["id"],"layer":source.get("layer","")}
                 _enqueue(db,"wfs_sync",payload,now,message="Scheduled source sync");count+=1
             db.execute("INSERT INTO schedules(source_id,last_run,next_run) VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET last_run=excluded.last_run,next_run=excluded.next_run",(source["id"],now,now+interval))
             db.execute("COMMIT")
