@@ -1,0 +1,33 @@
+services:
+  demo:
+  wms:
+    md:
+      title: Goedegis cached OGC basemaps
+  wmts:
+  tms:
+    use_grid_names: true
+  kml:
+  tile:
+layers:
+  - name: osm
+    title: OpenStreetMap (remote source, cacheable subject to source policy)
+    sources: [osm_cache]
+caches:
+  osm_cache:
+    grids: [webmercator]
+    sources: [osm_source]
+sources:
+  osm_source:
+    type: tile
+    grid: webmercator
+    url: https://tile.openstreetmap.org/%(z)s/%(x)s/%(y)s.png
+    http:
+      client_timeout: 30
+grids:
+  webmercator:
+    base: GLOBAL_WEBMERCATOR
+globals:
+  cache:
+    base_dir: /mapproxy/cache_data
+  image:
+    resampling_method: bilinear
