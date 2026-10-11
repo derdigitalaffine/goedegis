@@ -1,6 +1,6 @@
 import json, os, subprocess, time
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 import httpx
 from .store import connect
 
@@ -11,13 +11,12 @@ def validate_url(url):
     p = urlparse(url)
     if p.scheme not in ("http", "https") or not p.hostname:
         raise ValueError("Only HTTP(S) URLs are supported")
-    # Do not allow the LAN administration UI to fetch localhost/internal URLs.
     import ipaddress, socket
     addresses = socket.getaddrinfo(p.hostname, None)
     for address in addresses:
         ip = ipaddress.ip_address(address[4][0])
         if not ip.is_global:
-            raise ValueError("Private/reserved addresses are blocked for worker downloads")
+            raise ValueError("Private/reserved addresses blocked for worker downloads")
     return url
 
 def run_job(kind, payload):
@@ -34,19 +33,24 @@ def run_job(kind, payload):
                 for chunk in response.iter_bytes():
                     out.write(chunk)
         temp.replace(target)
-        return "OSM extract downloaded; import and diff application require additional configuration"
+        return "OSM extract downloaded; separate import pipeline still required"
     if kind == "wfs_sync":
         url = validate_url(payload["url"])
         table = payload.get("table", "wfs_import")
-        if not table.replace("_", "").isalnum() or not table[0].isalpha():
+        if not table or not table.replace("_", "").isalnum() or not table[0].isalpha():
             raise ValueError("Invalid table")
-        dsn = os.environ["POSTGRES_DSN"]
-        subprocess.run(["ogr2ogr", "-f", "PostgreSQL", "PG:" + dsn.replace("postgresql://", ""),
-            url, "-nln", "synced." + table, "-overwrite", "-lco", "GEOMETRY_NAME=geom"],
+        p = urlparse(os.environ["POSTGRES_DSN"])
+        if p.scheme not in ("postgresql", "postgres"):
+            raise ValueError("Invalid database URL")
+        dsn = "PG:host={host} port={port} dbname={db} user={user} password={password}".format(
+            host=p.hostname, port=p.port or 5432, db=p.path.lstrip("/"),
+            user=unquote(p.username or ""), password=unquote(p.password or ""))
+        subprocess.run(["ogr2ogr", "-f", "PostgreSQL", dsn,
+            "WFS:" + url, "-nln", "synced." + table, "-overwrite", "-lco", "GEOMETRY_NAME=geom"],
             check=True, timeout=3600)
         return "WFS synced"
     if kind == "tile_prewarm":
-        raise ValueError("Tile prewarming requires a configured permitted upstream and cache seeding plan")
+        raise ValueError("Tile prewarming requires a permitted source and seeding plan")
     raise ValueError("Unknown job type")
 
 def main():
