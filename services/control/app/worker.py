@@ -4,24 +4,17 @@ from urllib.parse import urlparse,unquote
 from .store import connect
 from .network import validate_url,download_to
 from .cache import run as prewarm
+from .vector import vector_id,bbox_text
 
 OSM=Path(os.getenv("GOEDEGIS_OSM_DIR","/data/osm"))
 TILES=Path(os.getenv("GOEDEGIS_TILE_DIR","/data/tiles"))
 
-def vector_id(area_id):
-    clean="".join(c for c in area_id.lower() if c.isalnum() or c in "-_")
-    if not clean or len(clean)>80:raise ValueError("Invalid area ID")
-    return "area-"+clean
-
 def build_vector_tiles(payload,progress,cancelled):
     if not (OSM/"latest.osm.pbf").is_file():raise ValueError("No OSM PBF available; download one first")
-    area_id=payload["area_id"];bbox=payload["bbox"]
-    if not isinstance(bbox,list) or len(bbox)!=4:raise ValueError("Invalid build bbox")
-    if not all(isinstance(v,(int,float)) for v in bbox):raise ValueError("Invalid build bbox")
-    ident=vector_id(area_id);requests=TILES/".requests";requests.mkdir(parents=True,exist_ok=True)
+    ident=vector_id(payload["area_id"]);bbox=bbox_text(payload["bbox"])
+    requests=TILES/".requests";requests.mkdir(parents=True,exist_ok=True)
     request=requests/(ident+".request");done=requests/(ident+".done");failed=requests/(ident+".failed")
-    done.unlink(missing_ok=True);failed.unlink(missing_ok=True)
-    request.write_text(",".join(str(float(v)) for v in bbox))
+    done.unlink(missing_ok=True);failed.unlink(missing_ok=True);request.write_text(bbox)
     progress(1,"Tilemaker build requested")
     started=time.time();timeout=int(payload.get("timeout_seconds",21600))
     while True:
@@ -29,17 +22,13 @@ def build_vector_tiles(payload,progress,cancelled):
             request.unlink(missing_ok=True)
             raise InterruptedError("Vector build cancellation requested; an already-running Tilemaker process may finish its current build")
         if done.exists():
-            done.unlink(missing_ok=True);progress(100,"Vector MBTiles ready")
-            return f"Vector map ready: {ident}.mbtiles"
+            done.unlink(missing_ok=True);progress(100,"Vector MBTiles ready");return f"Vector map ready: {ident}.mbtiles"
         if failed.exists():
-            reason=failed.read_text(errors="replace")[:300];failed.unlink(missing_ok=True)
-            raise ValueError("Tilemaker failed: "+reason)
+            reason=failed.read_text(errors="replace")[:300];failed.unlink(missing_ok=True);raise ValueError("Tilemaker failed: "+reason)
         if time.time()-started>timeout:
             request.unlink(missing_ok=True);raise TimeoutError("Vector build timed out")
         elapsed=time.time()-started
-        # Tilemaker does not expose machine-readable progress through this simple handoff.
-        progress(min(95,2+elapsed/60),"Tilemaker is building vector tiles")
-        time.sleep(3)
+        progress(min(95,2+elapsed/60),"Tilemaker is building vector tiles");time.sleep(3)
 
 def run_job(kind,payload,progress=lambda a,b:None,cancelled=lambda:False):
     if kind=="tile_prewarm":return prewarm(payload,progress,cancelled)
@@ -67,7 +56,7 @@ def main():
     while True:
         with connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row=db.execute("""SELECT * FROM jobs WHERE state IN ('queued','retry_wait') AND next_run<=? ORDER BY priority DESC,created ASC LIMIT 1""",(time.time(),)).fetchone()
+            row=db.execute("SELECT * FROM jobs WHERE state IN ('queued','retry_wait') AND next_run<=? ORDER BY priority DESC,created ASC LIMIT 1",(time.time(),)).fetchone()
             if row:db.execute("UPDATE jobs SET state='running',attempts=attempts+1,updated=? WHERE id=?",(time.time(),row["id"]))
             db.execute("COMMIT")
         if not row:time.sleep(2);continue
