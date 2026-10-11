@@ -39,6 +39,10 @@ def run_job(kind,payload,progress=lambda a,b:None,cancelled=lambda:False):
     raise ValueError("Unknown job type")
 
 def main():
+    # A worker restart must not strand claimed jobs forever.
+    # Requeue only jobs without an active worker; deploy with a single worker replica.
+    with connect() as db:
+        db.execute("UPDATE jobs SET state='queued',message='Requeued after worker restart',next_run=?,updated=? WHERE state='running'",(time.time(),time.time()))
     while True:
         with connect() as db:
             db.execute("BEGIN IMMEDIATE")
