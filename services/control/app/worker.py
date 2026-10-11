@@ -10,15 +10,23 @@ from .geo import geometry
 OSM=Path(os.getenv("GOEDEGIS_OSM_DIR","/data/osm"))
 TILES=Path(os.getenv("GOEDEGIS_TILE_DIR","/data/tiles"))
 
+def area_geometry(payload):
+    value=payload.get("geojson")
+    if value is None:
+        area=next((a for a in read_config().get("areas",[]) if a.get("id")==payload.get("area_id")),None)
+        if area is None:raise ValueError("Area geometry unavailable for vector build")
+        value=area.get("geojson")
+    return geometry(value)
+
 def prepare_area_extract(payload,progress,cancelled):
     source=OSM/"latest.osm.pbf"
     if not source.is_file():raise ValueError("No OSM PBF available; download one first")
-    ident=vector_id(payload["area_id"]);geom,_=geometry(payload["geojson"])
+    ident=vector_id(payload["area_id"]);geom,_=area_geometry(payload)
     area_dir=OSM/"areas";area_dir.mkdir(parents=True,exist_ok=True)
     polygon=area_dir/(ident+".geojson");extract=area_dir/(ident+".osm.pbf");log=area_dir/(ident+".extract.log")
     extract.unlink(missing_ok=True)
     polygon.write_text(json.dumps({"type":"Feature","properties":{},"geometry":geom},separators=(",",":")))
-    progress(2,"Clipping OSM data to area polygon")
+    progress(2,"Selecting OSM data by area polygon")
     command=["osmium","extract","--polygon",str(polygon),"--strategy","complete_ways","--set-bounds","--output",str(extract),"--overwrite",str(source)]
     try:
         code=_run_cancellable(command,log,int(payload.get("extract_timeout_seconds",3600)),cancelled,label="OSM area extraction")
@@ -34,20 +42,20 @@ def prepare_area_extract(payload,progress,cancelled):
         raise
 
 def build_vector_tiles(payload,progress,cancelled):
-    ident=vector_id(payload["area_id"]);bbox=bbox_text(payload["bbox"])
+    ident=vector_id(payload["area_id"]);_,bounds=area_geometry(payload);bbox=bbox_text(payload.get("bbox",bounds))
     extract,polygon,extract_log=prepare_area_extract(payload,progress,cancelled)
     requests=TILES/".requests";requests.mkdir(parents=True,exist_ok=True)
     request=requests/(ident+".request");done=requests/(ident+".done");failed=requests/(ident+".failed")
     try:
         done.unlink(missing_ok=True);failed.unlink(missing_ok=True);request.write_text(bbox+"\narea\n")
-        progress(16,"Tilemaker build requested for polygon extract");started=time.time();timeout=int(payload.get("timeout_seconds",21600))
+        progress(16,"Tilemaker build requested for polygon-selected extract");started=time.time();timeout=int(payload.get("timeout_seconds",21600))
         while True:
             if cancelled():request.unlink(missing_ok=True);raise InterruptedError("Vector build cancellation requested; an already-running Tilemaker process may finish its current build")
-            if done.exists():done.unlink(missing_ok=True);progress(100,"Polygon-clipped vector MBTiles ready");return f"Vector map ready: {ident}.mbtiles"
+            if done.exists():done.unlink(missing_ok=True);progress(100,"Polygon-selected vector MBTiles ready");return f"Vector map ready: {ident}.mbtiles"
             if failed.exists():
                 reason=failed.read_text(errors="replace")[:300];failed.unlink(missing_ok=True);raise ValueError("Tilemaker failed: "+reason)
             if time.time()-started>timeout:request.unlink(missing_ok=True);raise TimeoutError("Vector build timed out")
-            progress(min(95,17+(time.time()-started)/60),"Tilemaker is building polygon-clipped vector tiles");time.sleep(3)
+            progress(min(95,17+(time.time()-started)/60),"Tilemaker is building polygon-selected vector tiles");time.sleep(3)
     finally:
         extract.unlink(missing_ok=True);polygon.unlink(missing_ok=True);extract_log.unlink(missing_ok=True)
 
