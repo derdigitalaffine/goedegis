@@ -10,9 +10,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install backend dependencies
+        run: |
+          pip install -r services/control/requirements.txt
+          pyosmium-up-to-date --version
       - name: Python syntax
         run: python -m compileall -q services/control/app scripts/deploy.py
-      - name: Geometry tests
+      - name: Backend tests
         env:
           PYTHONPATH: services/control
         run: python -m unittest discover -s services/control/app/tests -v

@@ -45,31 +45,53 @@ def download_osm(payload,progress,cancelled):
     rebuilds=enqueue_vector_rebuilds() if payload.get("rebuild_vectors") else 0
     return f"OSM extract downloaded ({size//(1024*1024)} MiB); queued {rebuilds} vector rebuild(s)"
 
+def _run_cancellable(cmd,log_path,timeout,cancelled):
+    started=time.time();log_path.parent.mkdir(parents=True,exist_ok=True)
+    with log_path.open("w") as log:
+        proc=subprocess.Popen(cmd,stdout=log,stderr=subprocess.STDOUT,text=True)
+        while proc.poll() is None:
+            if cancelled():
+                proc.terminate()
+                try:proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:proc.kill();proc.wait()
+                raise InterruptedError("OSM replication update cancelled")
+            if time.time()-started>timeout:
+                proc.terminate()
+                try:proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:proc.kill();proc.wait()
+                raise TimeoutError("OSM replication update timed out")
+            time.sleep(1)
+        return proc.returncode
+
 def update_osm(payload,progress,cancelled):
     current=OSM/"latest.osm.pbf";replication=payload.get("replication_url")
     if not current.is_file() or not replication:
-        progress(1,"No replication state available; downloading a fresh snapshot")
+        progress(1,"No usable replication state; downloading a fresh snapshot")
         return download_osm(payload,progress,cancelled)
-    replication=validate_url(replication)
-    work=OSM/"replication";work.mkdir(parents=True,exist_ok=True);changes=work/"changes.osc.gz";updated=OSM/"latest.updated.osm.pbf"
-    changes.unlink(missing_ok=True);updated.unlink(missing_ok=True)
-    progress(5,"Fetching replication changes")
-    try:
-        subprocess.run(["osmium","get-changes","--server",replication,"--output",str(changes),str(current)],check=True,timeout=int(payload.get("replication_timeout_seconds",1800)))
-        if cancelled():raise InterruptedError("OSM update cancelled")
-        if not changes.exists() or changes.stat().st_size==0:return "OSM data already current"
-        progress(45,"Applying OSM replication changes")
-        subprocess.run(["osmium","apply-changes",str(current),str(changes),"--output",str(updated),"--overwrite"],check=True,timeout=int(payload.get("apply_timeout_seconds",3600)))
-        subprocess.run(["osmium","fileinfo","--check",str(updated)],check=True,timeout=300)
-        if cancelled():raise InterruptedError("OSM update cancelled")
-        updated.replace(current);progress(80,"OSM snapshot updated")
-        rebuilds=enqueue_vector_rebuilds() if payload.get("rebuild_vectors") else 0
-        return f"OSM replication applied; queued {rebuilds} vector rebuild(s)"
-    except subprocess.CalledProcessError:
-        progress(1,"Replication failed; downloading a fresh snapshot")
-        updated.unlink(missing_ok=True);changes.unlink(missing_ok=True)
-        return download_osm(payload,progress,cancelled)
-    finally:updated.unlink(missing_ok=True);changes.unlink(missing_ok=True)
+    replication=validate_url(replication);work=OSM/"replication";work.mkdir(parents=True,exist_ok=True)
+    before=(current.stat().st_size,current.stat().st_mtime_ns);size_mb=max(16,min(1024,int(payload.get("replication_batch_mb",256))));timeout=int(payload.get("replication_timeout_seconds",3600));max_batches=max(1,min(20,int(payload.get("replication_max_batches",8))));log=work/"pyosmium-up-to-date.log"
+    for batch in range(max_batches):
+        if cancelled():raise InterruptedError("OSM replication update cancelled")
+        progress(min(75,5+batch*8),f"Applying OSM replication batch {batch+1}")
+        base=["pyosmium-up-to-date","--server",replication,"--size",str(size_mb),"--tmpdir",str(work),str(current)]
+        code=_run_cancellable(base,log,timeout,cancelled)
+        if code>1 and batch==0:
+            progress(8,"Bootstrapping OSM replication state")
+            bootstrap=["pyosmium-up-to-date","--ignore-osmosis-headers","--server",replication,"--size",str(size_mb),"--tmpdir",str(work),str(current)]
+            code=_run_cancellable(bootstrap,log,timeout,cancelled)
+        if code==0:break
+        if code==1:continue
+        detail=log.read_text(errors="replace")[-500:] if log.exists() else "pyosmium-up-to-date failed"
+        if payload.get("fallback_snapshot",True):
+            progress(1,"Replication failed; downloading a fresh snapshot")
+            return download_osm(payload,progress,cancelled)
+        raise RuntimeError(detail)
+    else:raise RuntimeError("OSM replication is still behind after the configured batch limit")
+    after=(current.stat().st_size,current.stat().st_mtime_ns)
+    if after==before:return "OSM data already current"
+    progress(80,"OSM snapshot updated")
+    rebuilds=enqueue_vector_rebuilds() if payload.get("rebuild_vectors") else 0
+    return f"OSM replication applied; queued {rebuilds} vector rebuild(s)"
 
 def run_job(kind,payload,progress=lambda a,b:None,cancelled=lambda:False):
     if kind=="tile_prewarm":return prewarm(payload,progress,cancelled)

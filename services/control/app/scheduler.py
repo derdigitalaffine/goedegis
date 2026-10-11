@@ -8,6 +8,12 @@ def ensure_table(db):
         source_id TEXT PRIMARY KEY,last_run REAL NOT NULL DEFAULT 0,next_run REAL NOT NULL DEFAULT 0)""")
 
 
+def reset_osm_schedule():
+    with connect() as db:
+        ensure_table(db)
+        db.execute("DELETE FROM schedules WHERE source_id='__osm_snapshot__'")
+
+
 def _enqueue(db,kind,payload,now,priority=0,max_attempts=3,message="Scheduled job"):
     job_id=str(uuid.uuid4())
     db.execute("""INSERT INTO jobs

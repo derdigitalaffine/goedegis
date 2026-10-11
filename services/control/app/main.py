@@ -1,14 +1,15 @@
-import os,shutil,time,uuid
+import os,shutil,uuid
 from pathlib import Path
+from urllib.parse import urlparse
 from fastapi import FastAPI,HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel,Field
-from .store import read_config,write_config,add_job,jobs,connect,change_job
+from .store import read_config,write_config,add_job,jobs,change_job
 from .geo import geometry
 from .network import validate_url
 from .cache import CACHE
 from .ogc import capabilities
-from .scheduler import status as schedule_status,enqueue_due
+from .scheduler import status as schedule_status,enqueue_due,enqueue_osm_refresh,reset_osm_schedule
 
 TILES=Path(os.getenv("GOEDEGIS_TILE_DIR","/data/tiles"))
 app=FastAPI(title="Goedegis internal control plane",docs_url="/control/docs",openapi_url="/control/openapi.json")
@@ -22,8 +23,13 @@ class Source(BaseModel):
     kind:str=Field(pattern="^(wms|wmts|wfs|osm|xyz)$");enabled:bool=True;cache_allowed:bool=False
     interval_minutes:int=Field(default=1440,ge=15);layer:str=""
 class JobRequest(BaseModel):
-    type:str=Field(pattern="^(wfs_sync|tile_prewarm|download_osm|build_vector_tiles)$");payload:dict=Field(default_factory=dict)
+    type:str=Field(pattern="^(wfs_sync|tile_prewarm|download_osm|update_osm|build_vector_tiles)$");payload:dict=Field(default_factory=dict)
     priority:int=Field(default=0,ge=-100,le=100);max_attempts:int=Field(default=3,ge=1,le=10)
+class OSMSettings(BaseModel):
+    osm_auto_refresh:bool=False
+    osm_refresh_hours:int=Field(default=24,ge=1,le=720)
+    osm_pbf_url:str=Field(min_length=1,max_length=1000)
+    osm_replication_url:str=Field(default="",max_length=1000)
 
 def vector_id(area_id):
     clean="".join(c for c in area_id.lower() if c.isalnum() or c in "-_")
@@ -37,10 +43,30 @@ def vector_payload(area_id):
     except ValueError as exc:raise HTTPException(422,str(exc))
     return {"area_id":area_id,"bbox":bbox,"timeout_seconds":21600}
 
+def effective_osm_settings():
+    settings=read_config().get("settings",{})
+    return {"osm_auto_refresh":bool(settings.get("osm_auto_refresh",False)),"osm_refresh_hours":int(settings.get("osm_refresh_hours",24)),"osm_pbf_url":settings.get("osm_pbf_url") or os.getenv("OSM_PBF_URL",""),"osm_replication_url":settings.get("osm_replication_url") or os.getenv("OSM_REPLICATION_URL","")}
+
 @app.get("/control/health")
 def health():return {"ok":True,"service":"goedegis-control"}
 @app.get("/control/config")
 def get_config():return read_config()
+@app.get("/control/settings/osm")
+def get_osm_settings():return effective_osm_settings()
+@app.put("/control/settings/osm")
+def put_osm_settings(settings:OSMSettings):
+    try:
+        pbf=validate_url(settings.osm_pbf_url)
+        if not urlparse(pbf).path.lower().endswith(".osm.pbf"):raise ValueError("OSM PBF URL must end in .osm.pbf")
+        replication=validate_url(settings.osm_replication_url) if settings.osm_replication_url else ""
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    data=read_config();data.setdefault("settings",{}).update({**settings.model_dump(),"osm_pbf_url":pbf,"osm_replication_url":replication});write_config(data);reset_osm_schedule();return effective_osm_settings()
+@app.post("/control/osm/refresh")
+def refresh_osm():
+    if not effective_osm_settings()["osm_pbf_url"]:raise HTTPException(422,"OSM PBF URL is not configured")
+    queued=enqueue_osm_refresh(force=True)
+    if not queued:raise HTTPException(409,"An OSM refresh is already queued or running")
+    return {"queued":queued}
 @app.post("/control/areas")
 def create_area(area:Area):
     if area.zoom_min>area.zoom_max:raise HTTPException(422,"Invalid zoom range")
@@ -51,8 +77,7 @@ def create_area(area:Area):
 def delete_area(area_id:str):
     data=read_config();data["areas"]=[a for a in data["areas"] if a["id"]!=area_id];write_config(data);return {"ok":True}
 @app.post("/control/areas/{area_id}/vector-build")
-def build_area_vector_map(area_id:str):
-    return {"id":add_job("build_vector_tiles",vector_payload(area_id),priority=10,max_attempts=2)}
+def build_area_vector_map(area_id:str):return {"id":add_job("build_vector_tiles",vector_payload(area_id),priority=10,max_attempts=2)}
 @app.get("/control/vector-maps")
 def vector_maps():
     TILES.mkdir(parents=True,exist_ok=True);result=[]
@@ -78,10 +103,11 @@ def enqueue(req:JobRequest):
         if not source.get("cache_allowed"):raise HTTPException(422,"Caching not approved")
         if source["kind"] not in ("wms","wmts","xyz"):raise HTTPException(422,"Raster source required")
         payload={"area":area,"source":source,"zoom_min":area["zoom_min"],"zoom_max":area["zoom_max"],"max_tiles":min(30000,int(payload.get("max_tiles",10000)))}
-    elif req.type=="build_vector_tiles":
-        payload=vector_payload(payload.get("area_id",""))
-    elif req.type in ("wfs_sync","download_osm"):
-        try:validate_url(payload["url"])
+    elif req.type=="build_vector_tiles":payload=vector_payload(payload.get("area_id",""))
+    elif req.type in ("wfs_sync","download_osm","update_osm"):
+        try:
+            validate_url(payload["url"])
+            if req.type=="update_osm" and payload.get("replication_url"):validate_url(payload["replication_url"])
         except (ValueError,KeyError) as exc:raise HTTPException(422,str(exc))
     return {"id":add_job(req.type,payload,req.priority,req.max_attempts)}
 @app.post("/control/jobs/{job_id}/{action}")
