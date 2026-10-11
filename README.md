@@ -37,6 +37,12 @@ The ncurses menu creates `.env` with random passwords and lets you select servic
 
 A single downloaded PBF may cover several Goedegis areas. Each area gets its own temporary polygon-selected PBF during a build and its own persistent MBTiles archive. Osmium's `complete_ways` strategy keeps complete ways and required referenced objects when they intersect the extraction area, so objects crossing the polygon boundary can intentionally extend beyond it. This is a polygon-based OSM selection, **not a destructive geometric clip of every OSM feature at the exact boundary**. Temporary area PBF/GeoJSON files are removed after the build. Large source extracts and complex areas can still require substantial memory, CPU and disk.
 
+## Routing workflow
+
+Enable the `routing` profile to run Valhalla. In **Suche & Route**, choose Auto, Fahrrad, Zu Fuß or Lkw. Start and destination can be entered as `lon,lat` or selected directly on the MapLibre map with the A/B buttons. Goedegis validates coordinate ranges, places visible A/B markers, requests the route from the local Valhalla service, decodes Valhalla's polyline6 geometry and draws it as a persistent map overlay. Distance and duration are shown in the route panel and map status; **Route löschen** removes the route line and both markers again.
+
+The routing graph is currently managed by the Valhalla container independently from the Goedegis OSM PBF update lifecycle. Coordinated graph rebuild/update scheduling remains planned.
+
 ## Official German geodata presets
 
 The source manager contains curated one-click presets for official services from the Bundesamt für Kartographie und Geodäsie (BKG):
@@ -56,7 +62,7 @@ The WMTS preset stores the standards service URL separately from the capabilitie
 
 ## Implemented versus planned
 
-Implemented: responsive MapLibre UI with Playwright desktop/mobile checks, polygon areas, polygon-selected OSM area extracts before Tilemaker, OGC source registry/capabilities inspection, curated official BKG presets with attribution metadata, bounded raster cache, streamed OSM PBF download, incremental PBF replication with Pyosmium, automatic/manual refresh controls, per-area OSM-to-MBTiles rebuilds, hot-reloading vector tile service, Nominatim/Valhalla/OGC Compose modules, persistent jobs with retries/pause/cancel controls, scheduled WFS sync with feature-type selection, resource indicators and ncurses deployment.
+Implemented: responsive MapLibre UI with Playwright desktop/mobile checks, polygon areas, polygon-selected OSM area extracts before Tilemaker, interactive Valhalla route visualization with map-picked A/B points, OGC source registry/capabilities inspection, curated official BKG presets with attribution metadata, bounded raster cache, streamed OSM PBF download, incremental PBF replication with Pyosmium, automatic/manual refresh controls, per-area OSM-to-MBTiles rebuilds, hot-reloading vector tile service, Nominatim/Valhalla/OGC Compose modules, persistent jobs with retries/pause/cancel controls, scheduled WFS sync with feature-type selection, resource indicators and ncurses deployment.
 
 Still incomplete: incremental mutation of existing MBTiles (the synchronized PBF is incremental but affected area MBTiles are rebuilt), destructive geometric clipping of crossing OSM objects at the polygon edge (Osmium `complete_ways` intentionally preserves complete ways), automatic date-specific TopPlusOpen offline source-note generation, coordinated Nominatim/Valhalla rebuild scheduling, full MapLibre visual style editor, automatic GeoServer publication of synced WFS layers, richer POI autocomplete/filtering and production-scale end-to-end validation.
 
