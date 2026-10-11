@@ -1,10 +1,11 @@
 import json,os,subprocess,time
 from pathlib import Path
 from urllib.parse import urlparse,unquote
-from .store import connect
+from .store import connect,read_config,add_job
 from .network import validate_url,download_to
 from .cache import run as prewarm
 from .vector import vector_id,bbox_text
+from .geo import geometry
 
 OSM=Path(os.getenv("GOEDEGIS_OSM_DIR","/data/osm"))
 TILES=Path(os.getenv("GOEDEGIS_TILE_DIR","/data/tiles"))
@@ -30,6 +31,17 @@ def build_vector_tiles(payload,progress,cancelled):
         elapsed=time.time()-started
         progress(min(95,2+elapsed/60),"Tilemaker is building vector tiles");time.sleep(3)
 
+def enqueue_vector_rebuilds():
+    queued=0
+    for area in read_config().get("areas",[]):
+        try:_,bbox=geometry(area["geojson"])
+        except (KeyError,ValueError):continue
+        with connect() as db:
+            active=db.execute("SELECT 1 FROM jobs WHERE type='build_vector_tiles' AND state IN ('queued','running','retry_wait','paused') AND json_extract(payload,'$.area_id')=? LIMIT 1",(area["id"],)).fetchone()
+        if active:continue
+        add_job("build_vector_tiles",{"area_id":area["id"],"bbox":bbox,"timeout_seconds":21600},priority=10,max_attempts=2);queued+=1
+    return queued
+
 def run_job(kind,payload,progress=lambda a,b:None,cancelled=lambda:False):
     if kind=="tile_prewarm":return prewarm(payload,progress,cancelled)
     if kind=="download_osm":
@@ -40,7 +52,8 @@ def run_job(kind,payload,progress=lambda a,b:None,cancelled=lambda:False):
             value=round(current*100/total,1) if total else 0
             progress(min(99,value),f"Downloaded {current//(1024*1024)} MiB"+(f" / {total//(1024*1024)} MiB" if total else ""))
         size=download_to(url,target,max_bytes=int(payload.get("max_bytes",8_000_000_000)),timeout=1800,progress=dl_progress,cancelled=cancelled)
-        return f"OSM extract downloaded ({size//(1024*1024)} MiB)"
+        rebuilds=enqueue_vector_rebuilds() if payload.get("rebuild_vectors") else 0
+        return f"OSM extract downloaded ({size//(1024*1024)} MiB); queued {rebuilds} vector rebuild(s)"
     if kind=="build_vector_tiles":return build_vector_tiles(payload,progress,cancelled)
     if kind=="wfs_sync":
         url=validate_url(payload["url"]);table=payload.get("table","wfs_import")
