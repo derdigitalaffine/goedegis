@@ -12,18 +12,29 @@ cd goedegis
 python3 scripts/deploy.py
 ```
 
-The ncurses menu creates `.env` with random passwords and lets you select service profiles. Start with `core,database,jobs` and add `tiles,geocoding,routing,ogc,monitoring` as needed. Web UI: `http://<LAN-IP>:8080`. See [deployment notes](docs/DEPLOYMENT.md).
+The ncurses menu creates `.env` with random passwords and lets you select service profiles. Start with `core,database,jobs,tiles` for the offline basemap workflow and add `geocoding,routing,ogc,monitoring` as needed. Web UI: `http://<LAN-IP>:8080`. See [deployment notes](docs/DEPLOYMENT.md).
 
 ## Architecture
 
 - `core`: Nginx HTTP gateway, bundled MapLibre frontend, FastAPI configuration/job service
 - `database`: PostGIS
-- `jobs`: SQLite-backed persistent priority queue + worker, OSM PBF download and WFS import
-- `tiles`: TileServer GL; needs separately provisioned local MBTiles and style configuration
+- `jobs`: SQLite-backed persistent priority queue + worker, WFS sync and streamed OSM PBF downloads
+- `tiles`: Tilemaker vector builder + Martin tile server with hot-reloading MBTiles directory
 - `geocoding`: Nominatim with Geofabrik import and upstream replication
 - `routing`: Valhalla with separate local routing graph
-- `ogc`: MapProxy and GeoServer (service/layer configuration required)
+- `ogc`: MapProxy and GeoServer (service/layer publication still requires configuration)
 - `monitoring`: Prometheus and cAdvisor
+
+## Offline OSM basemap workflow
+
+1. Enable `core,database,jobs,tiles`.
+2. In the web UI, download a `.osm.pbf` extract (the default points to Geofabrik Baden-Württemberg and is configurable).
+3. Draw one or more polygon areas.
+4. Start **Vektorkarte für Gebiet bauen**. Goedegis passes the area's bounding box to Tilemaker and writes `area-<id>.mbtiles` into persistent `tiles_data`.
+5. Martin watches that directory and publishes new/updated MBTiles without a tile-server restart.
+6. Choose the generated vector map in the UI and load it in MapLibre. The bundled style deliberately avoids external fonts/sprites so the basic map remains offline-capable.
+
+A single downloaded PBF may cover several Goedegis areas. Each area gets its own MBTiles archive. The current build clips by bounding box, not the exact polygon boundary. Tilemaker's default schema/build settings are used; large extracts can require substantial memory, CPU and disk.
 
 ## Confirmed requirements
 
@@ -31,21 +42,18 @@ The ncurses menu creates `.env` with random passwords and lets you select servic
 
 ## Implemented versus planned
 
-The initial implementation includes responsive MapLibre canvas, simple polygon creation/deletion, source registry, Nominatim query, Valhalla route request, job queue and resource indicators, and Compose service definitions. **Not yet complete:** automated per-area replication, full vector map pipeline, fully offline preseeded map coverage, MapProxy layer editor, WFS publication, POI autocomplete, map style editor, robust retry/pause/recovery, automated tile prewarming and production-scale validation. The UI exposes an internal `/control` API for configuration; it is not intended as a general-purpose external GIS gateway.
+Implemented: responsive MapLibre UI, polygon areas, OGC source registry/capabilities inspection, bounded raster cache, local OSM PBF download, per-area OSM-to-MBTiles builds, hot-reloading vector tile service, Nominatim/Valhalla/OGC Compose modules, persistent jobs with retries/pause/cancel controls, scheduled WFS sync, resource indicators and ncurses deployment.
+
+Still incomplete: true incremental OSM diff application to the basemap MBTiles, exact polygon clipping, coordinated Nominatim/Valhalla rebuild scheduling, full MapLibre visual style editor, automatic GeoServer publication of synced WFS layers, richer POI autocomplete/filtering and production-scale end-to-end validation.
+
+## Cache and job management
+
+- OGC/XYZ sources have an explicit `cache_allowed` flag. **Check provider licenses and rate limits before enabling it.**
+- Raster prewarming is bounded by area and capped at 30,000 tiles per job.
+- Jobs persist progress and retry failures with exponential backoff; queued jobs can be paused/resumed and cooperative jobs cancelled.
+- WFS sources can be scheduled by their configured `interval_minutes`.
+- OSM PBF downloads stream directly to disk instead of buffering the complete extract in worker memory.
 
 ## Security
 
-No login is implemented by explicit requirement. **Do not expose port 8080 to the Internet.** Configure LAN firewall rules. HTTP traffic is unencrypted. Docker database ports are internal. Validate provider licenses before caching public or official services.
-
-## Cache and job management (second milestone)
-
-- Each polygon area now supports selected layer IDs and OSM tag keys.
-- OGC/XYZ source entries have an explicit `cache_allowed` flag. **Check the provider's license and rate limits before enabling it.**
-- The mobile interface can enqueue bounded raster prewarming for a chosen area/source, set a cache limit and display locally cached PNG tiles.
-- The worker persists progress, retries failures with exponential backoff and supports pausing queued jobs, resuming and cancelling cooperative tile jobs via `POST /control/jobs/{id}/{action}` where action is `pause`, `resume`, `retry` or `cancel`.
-- Cache files persist in the `cache_data` volume and are served from `/control/cache/{source_id}/{z}/{x}/{y}.png`. After initial sync, cached tiles can be viewed without Internet.
-- The basic map style controls change background color, layer visibility and opacity. This is **not** yet a complete MapLibre style editor.
-- Cache tile selection conservatively covers each polygon's bounding box and can include extra tiles; jobs are capped at 30,000 tiles. WMS currently supports EPSG:3857 and PNG.
-- Running jobs are not safely resumable across worker restarts; failed or interrupted jobs may need explicit retries. WFS import uses ogr2ogr and requires a reachable WFS server.
-
-**Important:** Nominatim, routing graph and offline basemap import are independent services; this milestone does not yet orchestrate their per-area incremental synchronization.
+No login is implemented by explicit requirement. **Do not expose port 8080 to the Internet.** Configure LAN firewall rules. HTTP traffic is unencrypted. Database and GIS backend ports are not published directly. Validate data-provider licenses before caching or redistributing sources.

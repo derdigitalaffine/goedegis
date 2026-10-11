@@ -10,6 +10,7 @@ from .cache import CACHE
 from .ogc import capabilities
 from .scheduler import status as schedule_status,enqueue_due
 
+TILES=Path(os.getenv("GOEDEGIS_TILE_DIR","/data/tiles"))
 app=FastAPI(title="Goedegis internal control plane",docs_url="/control/docs",openapi_url="/control/openapi.json")
 
 class Area(BaseModel):
@@ -21,8 +22,20 @@ class Source(BaseModel):
     kind:str=Field(pattern="^(wms|wmts|wfs|osm|xyz)$");enabled:bool=True;cache_allowed:bool=False
     interval_minutes:int=Field(default=1440,ge=15);layer:str=""
 class JobRequest(BaseModel):
-    type:str=Field(pattern="^(wfs_sync|tile_prewarm|download_osm)$");payload:dict=Field(default_factory=dict)
+    type:str=Field(pattern="^(wfs_sync|tile_prewarm|download_osm|build_vector_tiles)$");payload:dict=Field(default_factory=dict)
     priority:int=Field(default=0,ge=-100,le=100);max_attempts:int=Field(default=3,ge=1,le=10)
+
+def vector_id(area_id):
+    clean="".join(c for c in area_id.lower() if c.isalnum() or c in "-_")
+    if not clean or len(clean)>80:raise ValueError("Invalid area ID")
+    return "area-"+clean
+
+def vector_payload(area_id):
+    cfg=read_config();area=next((a for a in cfg["areas"] if a["id"]==area_id),None)
+    if area is None:raise HTTPException(404,"Area not found")
+    try:_,bbox=geometry(area["geojson"])
+    except ValueError as exc:raise HTTPException(422,str(exc))
+    return {"area_id":area_id,"bbox":bbox,"timeout_seconds":21600}
 
 @app.get("/control/health")
 def health():return {"ok":True,"service":"goedegis-control"}
@@ -37,6 +50,15 @@ def create_area(area:Area):
 @app.delete("/control/areas/{area_id}")
 def delete_area(area_id:str):
     data=read_config();data["areas"]=[a for a in data["areas"] if a["id"]!=area_id];write_config(data);return {"ok":True}
+@app.post("/control/areas/{area_id}/vector-build")
+def build_area_vector_map(area_id:str):
+    return {"id":add_job("build_vector_tiles",vector_payload(area_id),priority=10,max_attempts=2)}
+@app.get("/control/vector-maps")
+def vector_maps():
+    TILES.mkdir(parents=True,exist_ok=True);result=[]
+    for path in sorted(TILES.glob("area-*.mbtiles")):
+        stat=path.stat();result.append({"id":path.stem,"size":stat.st_size,"modified":stat.st_mtime})
+    return result
 @app.post("/control/sources")
 def create_source(source:Source):
     try:validate_url(source.url.replace("{z}","0").replace("{x}","0").replace("{y}","0"))
@@ -56,6 +78,8 @@ def enqueue(req:JobRequest):
         if not source.get("cache_allowed"):raise HTTPException(422,"Caching not approved")
         if source["kind"] not in ("wms","wmts","xyz"):raise HTTPException(422,"Raster source required")
         payload={"area":area,"source":source,"zoom_min":area["zoom_min"],"zoom_max":area["zoom_max"],"max_tiles":min(30000,int(payload.get("max_tiles",10000)))}
+    elif req.type=="build_vector_tiles":
+        payload=vector_payload(payload.get("area_id",""))
     elif req.type in ("wfs_sync","download_osm"):
         try:validate_url(payload["url"])
         except (ValueError,KeyError) as exc:raise HTTPException(422,str(exc))

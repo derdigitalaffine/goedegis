@@ -19,7 +19,10 @@ services:
       GOEDEGIS_CONFIG_DIR: /data/config
       GOEDEGIS_JOB_DB: /data/jobs/jobs.sqlite3
       GOEDEGIS_CACHE_DIR: /data/cache
-    volumes: ["config_data:/data/config","jobs_data:/data/jobs","cache_data:/data/cache"]
+      GOEDEGIS_TILE_DIR: /data/tiles
+      GOEDEGIS_OSM_DIR: /data/osm
+      OSM_PBF_URL: ${OSM_PBF_URL:-https://download.geofabrik.de/europe/germany/baden-wuerttemberg-latest.osm.pbf}
+    volumes: ["config_data:/data/config","jobs_data:/data/jobs","cache_data:/data/cache","tiles_data:/data/tiles","osm_data:/data/osm:ro"]
     restart: unless-stopped
   postgis:
     image: postgis/postgis:16-3.4
@@ -43,8 +46,9 @@ services:
       GOEDEGIS_JOB_DB: /data/jobs/jobs.sqlite3
       GOEDEGIS_CACHE_DIR: /data/cache
       GOEDEGIS_OSM_DIR: /data/osm
+      GOEDEGIS_TILE_DIR: /data/tiles
       POSTGRES_DSN: postgresql://${POSTGRES_USER:-goedegis}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgis:5432/${POSTGRES_DB:-goedegis}
-    volumes: ["config_data:/data/config","jobs_data:/data/jobs","cache_data:/data/cache","osm_data:/data/osm"]
+    volumes: ["config_data:/data/config","jobs_data:/data/jobs","cache_data:/data/cache","osm_data:/data/osm","tiles_data:/data/tiles"]
     depends_on:
       postgis:
         condition: service_healthy
@@ -58,10 +62,45 @@ services:
       GOEDEGIS_JOB_DB: /data/jobs/jobs.sqlite3
     volumes: ["config_data:/data/config","jobs_data:/data/jobs"]
     restart: unless-stopped
-  tiles:
-    image: maptiler/tileserver-gl:latest
+  tilebuilder:
+    image: ghcr.io/systemed/tilemaker:master
     profiles: [tiles]
-    volumes: ["tiles_data:/data"]
+    entrypoint: ["/bin/sh","-c"]
+    command:
+      - |
+        set -u
+        mkdir -p /tiles/.requests /tiles/.build /tiles/.store
+        while true; do
+          found=0
+          for request in /tiles/.requests/*.request; do
+            [ -f "$$request" ] || continue
+            found=1
+            id="$$(basename "$$request" .request)"
+            bbox="$$(cat "$$request")"
+            rm -f "/tiles/.build/$$id.mbtiles" "/tiles/.requests/$$id.done" "/tiles/.requests/$$id.failed"
+            rm -rf "/tiles/.store/$$id"
+            if [ ! -s /osm/latest.osm.pbf ]; then
+              echo "OSM PBF missing" > "/tiles/.requests/$$id.failed"
+            elif /usr/src/app/tilemaker /osm/latest.osm.pbf --output "/tiles/.build/$$id.mbtiles" --bbox "$$bbox" --store "/tiles/.store/$$id" --config /goedegis-tilemaker/config.json --process /usr/src/app/resources/process-openmaptiles.lua; then
+              mv -f "/tiles/.build/$$id.mbtiles" "/tiles/$$id.mbtiles"
+              echo "ok" > "/tiles/.requests/$$id.done"
+            else
+              rm -f "/tiles/.build/$$id.mbtiles"
+              echo "tilemaker failed" > "/tiles/.requests/$$id.failed"
+            fi
+            rm -rf "/tiles/.store/$$id"
+            rm -f "$$request"
+          done
+          [ "$$found" -eq 1 ] || sleep 2
+        done
+    volumes: ["osm_data:/osm:ro","tiles_data:/tiles","./config/tilemaker:/goedegis-tilemaker:ro"]
+    restart: unless-stopped
+  tiles:
+    image: ghcr.io/maplibre/martin:1.16.1
+    profiles: [tiles]
+    command: ["/tiles"]
+    volumes: ["tiles_data:/tiles:ro"]
+    expose: ["3000"]
     restart: unless-stopped
   nominatim:
     image: mediagis/nominatim:5.3
