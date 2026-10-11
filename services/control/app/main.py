@@ -42,9 +42,9 @@ def vector_id(area_id):
 def vector_payload(area_id):
     cfg=read_config();area=next((a for a in cfg["areas"] if a["id"]==area_id),None)
     if area is None:raise HTTPException(404,"Area not found")
-    try:_,bbox=geometry(area["geojson"])
+    try:geom,bbox=geometry(area["geojson"])
     except ValueError as exc:raise HTTPException(422,str(exc))
-    return {"area_id":area_id,"bbox":bbox,"timeout_seconds":21600}
+    return {"area_id":area_id,"bbox":bbox,"geojson":geom,"timeout_seconds":21600}
 
 def effective_osm_settings():
     settings=read_config().get("settings",{})
