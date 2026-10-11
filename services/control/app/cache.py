@@ -1,7 +1,6 @@
 """Bounded offline raster cache prewarming."""
 import os, re
 from pathlib import Path
-from urllib.parse import urlparse
 from .geo import geometry,tiles,tile_bounds
 from .network import get,validate_url
 
@@ -21,10 +20,10 @@ def run(payload, progress=lambda value,message:None, cancelled=lambda:False):
     if not 1<=maximum<=30000: raise ValueError("max_tiles must be 1..30000")
     selected=list(tiles(geom,zmin,zmax,maximum))
     if not selected: return "No tiles intersect the selected area"
-    url=source["url"]
-    validate_url(url.replace("{z}","0").replace("{x}","0").replace("{y}","0"))
     kind=source.get("kind")
     if kind not in ("wms","wmts","xyz"): raise ValueError("Only WMS/WMTS/XYZ raster sources supported")
+    url=source.get("tile_url") or source["url"]
+    validate_url(url.replace("{z}","0").replace("{x}","0").replace("{y}","0"))
     if kind in ("xyz","wmts") and not all(token in url for token in ("{z}","{x}","{y}")):
         raise ValueError("XYZ/WMTS source URL must contain {z}, {x}, {y}")
     if kind=="wms" and not source.get("layer"): raise ValueError("WMS layer required")
