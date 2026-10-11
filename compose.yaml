@@ -20,7 +20,9 @@ services:
       GOEDEGIS_JOB_DB: /data/jobs/jobs.sqlite3
       GOEDEGIS_CACHE_DIR: /data/cache
       GOEDEGIS_TILE_DIR: /data/tiles
-    volumes: ["config_data:/data/config","jobs_data:/data/jobs","cache_data:/data/cache","tiles_data:/data/tiles"]
+      GOEDEGIS_OSM_DIR: /data/osm
+      OSM_PBF_URL: ${OSM_PBF_URL:-https://download.geofabrik.de/europe/germany/baden-wuerttemberg-latest.osm.pbf}
+    volumes: ["config_data:/data/config","jobs_data:/data/jobs","cache_data:/data/cache","tiles_data:/data/tiles","osm_data:/data/osm:ro"]
     restart: unless-stopped
   postgis:
     image: postgis/postgis:16-3.4
