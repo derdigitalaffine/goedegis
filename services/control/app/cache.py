@@ -6,7 +6,7 @@ from .geo import geometry,tiles,tile_bounds
 from .network import get,validate_url
 
 CACHE=Path(os.getenv("GOEDEGIS_CACHE_DIR","/data/cache"))
-SAFE=re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$")
+SAFE=re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 def run(payload, progress=lambda value,message:None, cancelled=lambda:False):
     source=payload["source"]
