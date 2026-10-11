@@ -47,6 +47,8 @@ services:
       GOEDEGIS_CACHE_DIR: /data/cache
       GOEDEGIS_OSM_DIR: /data/osm
       GOEDEGIS_TILE_DIR: /data/tiles
+      OSM_PBF_URL: ${OSM_PBF_URL:-https://download.geofabrik.de/europe/germany/baden-wuerttemberg-latest.osm.pbf}
+      OSM_REPLICATION_URL: ${OSM_REPLICATION_URL:-https://download.geofabrik.de/europe/germany/baden-wuerttemberg-updates/}
       POSTGRES_DSN: postgresql://${POSTGRES_USER:-goedegis}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgis:5432/${POSTGRES_DB:-goedegis}
     volumes: ["config_data:/data/config","jobs_data:/data/jobs","cache_data:/data/cache","osm_data:/data/osm","tiles_data:/data/tiles"]
     depends_on:
@@ -60,6 +62,8 @@ services:
     environment:
       GOEDEGIS_CONFIG_DIR: /data/config
       GOEDEGIS_JOB_DB: /data/jobs/jobs.sqlite3
+      OSM_PBF_URL: ${OSM_PBF_URL:-https://download.geofabrik.de/europe/germany/baden-wuerttemberg-latest.osm.pbf}
+      OSM_REPLICATION_URL: ${OSM_REPLICATION_URL:-https://download.geofabrik.de/europe/germany/baden-wuerttemberg-updates/}
     volumes: ["config_data:/data/config","jobs_data:/data/jobs"]
     restart: unless-stopped
   tilebuilder:
