@@ -1,0 +1,27 @@
+name: goedegis
+services:
+  web:
+    image: nginx:1.27-alpine
+    profiles: ["core"]
+    ports:
+      - "${GOEDEGIS_BIND_IP:-0.0.0.0}:${GOEDEGIS_HTTP_PORT:-8080}:80"
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+    restart: unless-stopped
+  postgis:
+    image: postgis/postgis:16-3.4
+    profiles: ["database"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-goedegis}
+      POSTGRES_USER: ${POSTGRES_USER:-goedegis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+volumes:
+  postgis_data:
