@@ -36,3 +36,16 @@ The initial implementation includes responsive MapLibre canvas, simple polygon c
 ## Security
 
 No login is implemented by explicit requirement. **Do not expose port 8080 to the Internet.** Configure LAN firewall rules. HTTP traffic is unencrypted. Docker database ports are internal. Validate provider licenses before caching public or official services.
+
+## Cache and job management (second milestone)
+
+- Each polygon area now supports selected layer IDs and OSM tag keys.
+- OGC/XYZ source entries have an explicit `cache_allowed` flag. **Check the provider's license and rate limits before enabling it.**
+- The mobile interface can enqueue bounded raster prewarming for a chosen area/source, set a cache limit and display locally cached PNG tiles.
+- The worker persists progress, retries failures with exponential backoff and supports pausing queued jobs, resuming and cancelling cooperative tile jobs via `POST /control/jobs/{id}/{action}` where action is `pause`, `resume`, `retry` or `cancel`.
+- Cache files persist in the `cache_data` volume and are served from `/control/cache/{source_id}/{z}/{x}/{y}.png`. After initial sync, cached tiles can be viewed without Internet.
+- The basic map style controls change background color, layer visibility and opacity. This is **not** yet a complete MapLibre style editor.
+- Cache tile selection conservatively covers each polygon's bounding box and can include extra tiles; jobs are capped at 30,000 tiles. WMS currently supports EPSG:3857 and PNG.
+- Running jobs are not safely resumable across worker restarts; failed or interrupted jobs may need explicit retries. WFS import uses ogr2ogr and requires a reachable WFS server.
+
+**Important:** Nominatim, routing graph and offline basemap import are independent services; this milestone does not yet orchestrate their per-area incremental synchronization.
