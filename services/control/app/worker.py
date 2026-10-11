@@ -1,10 +1,11 @@
 import json,os,subprocess,time
 from pathlib import Path
 from urllib.parse import urlparse,unquote
-from .store import connect
+from .store import connect,read_config,add_job
 from .network import validate_url,download_to
 from .cache import run as prewarm
 from .vector import vector_id,bbox_text
+from .geo import geometry
 
 OSM=Path(os.getenv("GOEDEGIS_OSM_DIR","/data/osm"))
 TILES=Path(os.getenv("GOEDEGIS_TILE_DIR","/data/tiles"))
@@ -15,58 +16,86 @@ def build_vector_tiles(payload,progress,cancelled):
     requests=TILES/".requests";requests.mkdir(parents=True,exist_ok=True)
     request=requests/(ident+".request");done=requests/(ident+".done");failed=requests/(ident+".failed")
     done.unlink(missing_ok=True);failed.unlink(missing_ok=True);request.write_text(bbox)
-    progress(1,"Tilemaker build requested")
-    started=time.time();timeout=int(payload.get("timeout_seconds",21600))
+    progress(1,"Tilemaker build requested");started=time.time();timeout=int(payload.get("timeout_seconds",21600))
     while True:
-        if cancelled():
-            request.unlink(missing_ok=True)
-            raise InterruptedError("Vector build cancellation requested; an already-running Tilemaker process may finish its current build")
-        if done.exists():
-            done.unlink(missing_ok=True);progress(100,"Vector MBTiles ready");return f"Vector map ready: {ident}.mbtiles"
+        if cancelled():request.unlink(missing_ok=True);raise InterruptedError("Vector build cancellation requested; an already-running Tilemaker process may finish its current build")
+        if done.exists():done.unlink(missing_ok=True);progress(100,"Vector MBTiles ready");return f"Vector map ready: {ident}.mbtiles"
         if failed.exists():
             reason=failed.read_text(errors="replace")[:300];failed.unlink(missing_ok=True);raise ValueError("Tilemaker failed: "+reason)
-        if time.time()-started>timeout:
-            request.unlink(missing_ok=True);raise TimeoutError("Vector build timed out")
-        elapsed=time.time()-started
-        progress(min(95,2+elapsed/60),"Tilemaker is building vector tiles");time.sleep(3)
+        if time.time()-started>timeout:request.unlink(missing_ok=True);raise TimeoutError("Vector build timed out")
+        progress(min(95,2+(time.time()-started)/60),"Tilemaker is building vector tiles");time.sleep(3)
+
+def enqueue_vector_rebuilds():
+    queued=0
+    for area in read_config().get("areas",[]):
+        try:_,bbox=geometry(area["geojson"])
+        except (KeyError,ValueError):continue
+        with connect() as db:active=db.execute("SELECT 1 FROM jobs WHERE type='build_vector_tiles' AND state IN ('queued','running','retry_wait','paused') AND json_extract(payload,'$.area_id')=? LIMIT 1",(area["id"],)).fetchone()
+        if active:continue
+        add_job("build_vector_tiles",{"area_id":area["id"],"bbox":bbox,"timeout_seconds":21600},priority=10,max_attempts=2);queued+=1
+    return queued
+
+def download_osm(payload,progress,cancelled):
+    url=validate_url(payload["url"])
+    if not urlparse(url).path.lower().endswith(".osm.pbf"):raise ValueError("Only .osm.pbf downloads supported")
+    target=OSM/"latest.osm.pbf"
+    def dl_progress(current,total):
+        value=round(current*100/total,1) if total else 0;progress(min(99,value),f"Downloaded {current//(1024*1024)} MiB"+(f" / {total//(1024*1024)} MiB" if total else ""))
+    size=download_to(url,target,max_bytes=int(payload.get("max_bytes",8_000_000_000)),timeout=1800,progress=dl_progress,cancelled=cancelled)
+    rebuilds=enqueue_vector_rebuilds() if payload.get("rebuild_vectors") else 0
+    return f"OSM extract downloaded ({size//(1024*1024)} MiB); queued {rebuilds} vector rebuild(s)"
+
+def update_osm(payload,progress,cancelled):
+    current=OSM/"latest.osm.pbf";replication=payload.get("replication_url")
+    if not current.is_file() or not replication:
+        progress(1,"No replication state available; downloading a fresh snapshot")
+        return download_osm(payload,progress,cancelled)
+    replication=validate_url(replication)
+    work=OSM/"replication";work.mkdir(parents=True,exist_ok=True);changes=work/"changes.osc.gz";updated=OSM/"latest.updated.osm.pbf"
+    changes.unlink(missing_ok=True);updated.unlink(missing_ok=True)
+    progress(5,"Fetching replication changes")
+    try:
+        subprocess.run(["osmium","get-changes","--server",replication,"--output",str(changes),str(current)],check=True,timeout=int(payload.get("replication_timeout_seconds",1800)))
+        if cancelled():raise InterruptedError("OSM update cancelled")
+        if not changes.exists() or changes.stat().st_size==0:return "OSM data already current"
+        progress(45,"Applying OSM replication changes")
+        subprocess.run(["osmium","apply-changes",str(current),str(changes),"--output",str(updated),"--overwrite"],check=True,timeout=int(payload.get("apply_timeout_seconds",3600)))
+        subprocess.run(["osmium","fileinfo","--check",str(updated)],check=True,timeout=300)
+        if cancelled():raise InterruptedError("OSM update cancelled")
+        updated.replace(current);progress(80,"OSM snapshot updated")
+        rebuilds=enqueue_vector_rebuilds() if payload.get("rebuild_vectors") else 0
+        return f"OSM replication applied; queued {rebuilds} vector rebuild(s)"
+    except subprocess.CalledProcessError:
+        progress(1,"Replication failed; downloading a fresh snapshot")
+        updated.unlink(missing_ok=True);changes.unlink(missing_ok=True)
+        return download_osm(payload,progress,cancelled)
+    finally:updated.unlink(missing_ok=True);changes.unlink(missing_ok=True)
 
 def run_job(kind,payload,progress=lambda a,b:None,cancelled=lambda:False):
     if kind=="tile_prewarm":return prewarm(payload,progress,cancelled)
-    if kind=="download_osm":
-        url=validate_url(payload["url"])
-        if not urlparse(url).path.lower().endswith(".osm.pbf"):raise ValueError("Only .osm.pbf downloads supported")
-        target=OSM/"latest.osm.pbf"
-        def dl_progress(current,total):
-            value=round(current*100/total,1) if total else 0
-            progress(min(99,value),f"Downloaded {current//(1024*1024)} MiB"+(f" / {total//(1024*1024)} MiB" if total else ""))
-        size=download_to(url,target,max_bytes=int(payload.get("max_bytes",8_000_000_000)),timeout=1800,progress=dl_progress,cancelled=cancelled)
-        return f"OSM extract downloaded ({size//(1024*1024)} MiB)"
+    if kind=="download_osm":return download_osm(payload,progress,cancelled)
+    if kind=="update_osm":return update_osm(payload,progress,cancelled)
     if kind=="build_vector_tiles":return build_vector_tiles(payload,progress,cancelled)
     if kind=="wfs_sync":
         url=validate_url(payload["url"]);table=payload.get("table","wfs_import")
         if not table or not table.replace("_","").isalnum() or not table[0].isalpha():raise ValueError("Invalid table")
-        p=urlparse(os.environ["POSTGRES_DSN"])
-        dsn="PG:host={host} port={port} dbname={db} user={user} password={password}".format(host=p.hostname,port=p.port or 5432,db=p.path.lstrip("/"),user=unquote(p.username or ""),password=unquote(p.password or ""))
-        subprocess.run(["ogr2ogr","-f","PostgreSQL",dsn,"WFS:"+url,"-nln","synced."+table,"-overwrite","-lco","GEOMETRY_NAME=geom"],check=True,timeout=3600)
-        return "WFS synchronized"
+        p=urlparse(os.environ["POSTGRES_DSN"]);dsn="PG:host={host} port={port} dbname={db} user={user} password={password}".format(host=p.hostname,port=p.port or 5432,db=p.path.lstrip("/"),user=unquote(p.username or ""),password=unquote(p.password or ""))
+        subprocess.run(["ogr2ogr","-f","PostgreSQL",dsn,"WFS:"+url,"-nln","synced."+table,"-overwrite","-lco","GEOMETRY_NAME=geom"],check=True,timeout=3600);return "WFS synchronized"
     raise ValueError("Unknown job type")
 
 def main():
     with connect() as db:db.execute("UPDATE jobs SET state='queued',message='Requeued after worker restart',next_run=?,updated=? WHERE state='running'",(time.time(),time.time()))
     while True:
         with connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row=db.execute("SELECT * FROM jobs WHERE state IN ('queued','retry_wait') AND next_run<=? ORDER BY priority DESC,created ASC LIMIT 1",(time.time(),)).fetchone()
-            if row:db.execute("UPDATE jobs SET state='running',attempts=attempts+1,updated=? WHERE id=?",(time.time(),row["id"]))
-            db.execute("COMMIT")
+            db.execute("BEGIN IMMEDIATE");row=db.execute("SELECT * FROM jobs WHERE state IN ('queued','retry_wait') AND next_run<=? ORDER BY priority DESC,created ASC LIMIT 1",(time.time(),)).fetchone()
+            if row:db.execute("UPDATE jobs SET state='running',attempts=attempts+1,updated=? WHERE id=?",(time.time(),row["id"]));db.execute("COMMIT")
         if not row:time.sleep(2);continue
         def cancelled():
             with connect() as db:
                 found=db.execute("SELECT cancel_requested FROM jobs WHERE id=?",(row["id"],)).fetchone();return bool(found and found[0])
         def progress(value,message):
             with connect() as db:db.execute("UPDATE jobs SET progress=?,message=?,updated=? WHERE id=?",(value,message,time.time(),row["id"]))
-        try:
-            message=run_job(row["type"],json.loads(row["payload"]),progress,cancelled);state="cancelled" if cancelled() else "done"
+        try:message=run_job(row["type"],json.loads(row["payload"]),progress,cancelled);state="cancelled" if cancelled() else "done"
         except InterruptedError as exc:state,message="cancelled",str(exc)
         except Exception as exc:state,message="failed",str(exc)[:500]
         attempts=row["attempts"]+1
