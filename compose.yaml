@@ -1,27 +1,114 @@
 name: goedegis
 services:
-  web:
+  gateway:
     image: nginx:1.27-alpine
-    profiles: ["core"]
-    ports:
-      - "${GOEDEGIS_BIND_IP:-0.0.0.0}:${GOEDEGIS_HTTP_PORT:-8080}:80"
-    volumes:
-      - ./web:/usr/share/nginx/html:ro
+    profiles: [core]
+    ports: ["${GOEDEGIS_BIND_IP:-0.0.0.0}:${GOEDEGIS_HTTP_PORT:-8080}:80"]
+    volumes: ["./config/nginx.conf:/etc/nginx/nginx.conf:ro"]
+    depends_on: [web, control]
+    restart: unless-stopped
+  web:
+    build: ./web
+    profiles: [core]
+    restart: unless-stopped
+  control:
+    build: ./services/control
+    profiles: [core]
+    command: ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]
+    environment:
+      GOEDEGIS_CONFIG_DIR: /data/config
+      GOEDEGIS_JOB_DB: /data/jobs/jobs.sqlite3
+      GOEDEGIS_CACHE_DIR: /data/cache
+    volumes: ["config_data:/data/config","jobs_data:/data/jobs","cache_data:/data/cache"]
     restart: unless-stopped
   postgis:
     image: postgis/postgis:16-3.4
-    profiles: ["database"]
+    profiles: [database]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-goedegis}
       POSTGRES_USER: ${POSTGRES_USER:-goedegis}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    volumes:
-      - postgis_data:/var/lib/postgresql/data
+    volumes: ["postgis_data:/var/lib/postgresql/data","./config/postgis-init.sql:/docker-entrypoint-initdb.d/10-goedegis.sql:ro"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL","pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
-      timeout: 5s
-      retries: 10
+      retries: 20
+    restart: unless-stopped
+  worker:
+    build: ./services/control
+    profiles: [jobs]
+    command: ["python","-m","app.worker"]
+    environment:
+      GOEDEGIS_CONFIG_DIR: /data/config
+      GOEDEGIS_JOB_DB: /data/jobs/jobs.sqlite3
+      GOEDEGIS_CACHE_DIR: /data/cache
+      GOEDEGIS_OSM_DIR: /data/osm
+      POSTGRES_DSN: postgresql://${POSTGRES_USER:-goedegis}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgis:5432/${POSTGRES_DB:-goedegis}
+    volumes: ["config_data:/data/config","jobs_data:/data/jobs","cache_data:/data/cache","osm_data:/data/osm"]
+    depends_on:
+      postgis:
+        condition: service_healthy
+    restart: unless-stopped
+  tiles:
+    image: maptiler/tileserver-gl:latest
+    profiles: [tiles]
+    volumes: ["tiles_data:/data"]
+    restart: unless-stopped
+  nominatim:
+    image: mediagis/nominatim:5.3
+    profiles: [geocoding]
+    shm_size: 2gb
+    environment:
+      PBF_URL: ${OSM_PBF_URL:-https://download.geofabrik.de/europe/germany/baden-wuerttemberg-latest.osm.pbf}
+      REPLICATION_URL: ${OSM_REPLICATION_URL:-https://download.geofabrik.de/europe/germany/baden-wuerttemberg-updates/}
+      UPDATE_MODE: continuous
+      THREADS: ${NOMINATIM_THREADS:-4}
+      NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:?Set NOMINATIM_PASSWORD}
+    volumes: ["nominatim_db:/var/lib/postgresql/16/main"]
+    restart: unless-stopped
+  valhalla:
+    image: ghcr.io/nilsnolde/docker-valhalla/valhalla:latest
+    profiles: [routing]
+    environment:
+      tile_urls: ${OSM_PBF_URL:-https://download.geofabrik.de/europe/germany/baden-wuerttemberg-latest.osm.pbf}
+      serve_tiles: "True"
+      build_elevation: "False"
+      build_tar: "True"
+    volumes: ["valhalla_data:/custom_files"]
+    restart: unless-stopped
+  mapproxy:
+    image: kartoza/mapproxy:latest
+    profiles: [ogc]
+    volumes: ["./config/mapproxy:/mapproxy","mapproxy_cache:/mapproxy/cache_data"]
+    restart: unless-stopped
+  geoserver:
+    image: docker.osgeo.org/geoserver:2.28.2
+    profiles: [ogc]
+    environment:
+      GEOSERVER_ADMIN_USER: ${GEOSERVER_ADMIN_USER:-admin}
+      GEOSERVER_ADMIN_PASSWORD: ${GEOSERVER_ADMIN_PASSWORD:?Set GEOSERVER_ADMIN_PASSWORD}
+    volumes: ["geoserver_data:/opt/geoserver_data"]
+    restart: unless-stopped
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: [monitoring]
+    volumes: ["./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro","prometheus_data:/prometheus"]
+    restart: unless-stopped
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    profiles: [monitoring]
+    privileged: true
+    volumes: ["/:/rootfs:ro","/var/run:/var/run:ro","/sys:/sys:ro","/var/lib/docker:/var/lib/docker:ro"]
     restart: unless-stopped
 volumes:
+  config_data:
+  jobs_data:
+  cache_data:
+  osm_data:
   postgis_data:
+  tiles_data:
+  nominatim_db:
+  valhalla_data:
+  mapproxy_cache:
+  geoserver_data:
+  prometheus_data:
