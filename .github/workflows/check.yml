@@ -11,7 +11,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install backend dependencies
-        run: pip install -r services/control/requirements.txt
+        run: |
+          pip install -r services/control/requirements.txt
+          pyosmium-up-to-date --version
       - name: Python syntax
         run: python -m compileall -q services/control/app scripts/deploy.py
       - name: Backend tests
