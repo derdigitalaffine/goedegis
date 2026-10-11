@@ -18,7 +18,7 @@ The ncurses menu creates `.env` with random passwords and lets you select servic
 
 - `core`: Nginx HTTP gateway, bundled MapLibre frontend, FastAPI configuration/job service
 - `database`: PostGIS
-- `jobs`: SQLite-backed persistent priority queue + worker, WFS sync and streamed OSM PBF downloads
+- `jobs`: SQLite-backed persistent priority queue + worker, WFS sync, streamed OSM PBF downloads and Pyosmium replication updates
 - `tiles`: Tilemaker vector builder + Martin tile server with hot-reloading MBTiles directory
 - `geocoding`: Nominatim with Geofabrik import and upstream replication
 - `routing`: Valhalla with separate local routing graph
@@ -28,13 +28,14 @@ The ncurses menu creates `.env` with random passwords and lets you select servic
 ## Offline OSM basemap workflow
 
 1. Enable `core,database,jobs,tiles`.
-2. In the web UI, download a `.osm.pbf` extract (the default points to Geofabrik Baden-Württemberg and is configurable).
-3. Draw one or more polygon areas.
-4. Start **Vektorkarte für Gebiet bauen**. Goedegis passes the area's bounding box to Tilemaker and writes `area-<id>.mbtiles` into persistent `tiles_data`.
-5. Martin watches that directory and publishes new/updated MBTiles without a tile-server restart.
-6. Choose the generated vector map in the UI and load it in MapLibre. The bundled style deliberately avoids external fonts/sprites so the basic map remains offline-capable.
+2. In the web UI, configure a `.osm.pbf` extract and matching replication URL. The default points to Geofabrik Baden-Württemberg.
+3. Optionally enable automatic refresh and choose the interval. **OSM jetzt aktualisieren** forces a refresh immediately.
+4. Goedegis uses `pyosmium-up-to-date` to apply replication diffs to the persistent PBF. If replication cannot be bootstrapped or applied, the worker can fall back to a fresh snapshot download.
+5. Draw one or more polygon areas and start **Vektorkarte bauen**. Goedegis passes the area's bounding box to Tilemaker and writes `area-<id>.mbtiles` into persistent `tiles_data`.
+6. After a changed PBF is synchronized, vector rebuild jobs are automatically queued for configured areas. Martin watches the directory and publishes updated MBTiles without a tile-server restart.
+7. Choose the generated vector map in the UI and load it in MapLibre. The bundled style deliberately avoids external fonts/sprites so the basic map remains offline-capable.
 
-A single downloaded PBF may cover several Goedegis areas. Each area gets its own MBTiles archive. The current build clips by bounding box, not the exact polygon boundary. Tilemaker's default schema/build settings are used; large extracts can require substantial memory, CPU and disk.
+A single downloaded PBF may cover several Goedegis areas. Each area gets its own MBTiles archive. The current build clips by bounding box, not the exact polygon boundary. Goedegis uses its own OSM-only Tilemaker layer configuration with Tilemaker's bundled OpenMapTiles processing script; large extracts can require substantial memory, CPU and disk.
 
 ## Confirmed requirements
 
@@ -42,9 +43,9 @@ A single downloaded PBF may cover several Goedegis areas. Each area gets its own
 
 ## Implemented versus planned
 
-Implemented: responsive MapLibre UI, polygon areas, OGC source registry/capabilities inspection, bounded raster cache, local OSM PBF download, per-area OSM-to-MBTiles builds, hot-reloading vector tile service, Nominatim/Valhalla/OGC Compose modules, persistent jobs with retries/pause/cancel controls, scheduled WFS sync, resource indicators and ncurses deployment.
+Implemented: responsive MapLibre UI with Playwright desktop/mobile checks, polygon areas, OGC source registry/capabilities inspection, bounded raster cache, streamed OSM PBF download, incremental PBF replication with Pyosmium, automatic/manual refresh controls, per-area OSM-to-MBTiles rebuilds, hot-reloading vector tile service, Nominatim/Valhalla/OGC Compose modules, persistent jobs with retries/pause/cancel controls, scheduled WFS sync, resource indicators and ncurses deployment.
 
-Still incomplete: true incremental OSM diff application to the basemap MBTiles, exact polygon clipping, coordinated Nominatim/Valhalla rebuild scheduling, full MapLibre visual style editor, automatic GeoServer publication of synced WFS layers, richer POI autocomplete/filtering and production-scale end-to-end validation.
+Still incomplete: incremental mutation of existing MBTiles (the synchronized PBF is incremental but affected area MBTiles are rebuilt), exact polygon clipping, coordinated Nominatim/Valhalla rebuild scheduling, full MapLibre visual style editor, automatic GeoServer publication of synced WFS layers, richer POI autocomplete/filtering and production-scale end-to-end validation.
 
 ## Cache and job management
 
@@ -53,6 +54,7 @@ Still incomplete: true incremental OSM diff application to the basemap MBTiles, 
 - Jobs persist progress and retry failures with exponential backoff; queued jobs can be paused/resumed and cooperative jobs cancelled.
 - WFS sources can be scheduled by their configured `interval_minutes`.
 - OSM PBF downloads stream directly to disk instead of buffering the complete extract in worker memory.
+- OSM replication updates are batched, cancellable, and only enqueue vector rebuilds when the PBF actually changed.
 
 ## Security
 
