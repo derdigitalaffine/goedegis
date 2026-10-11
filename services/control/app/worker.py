@@ -10,29 +10,63 @@ from .geo import geometry
 OSM=Path(os.getenv("GOEDEGIS_OSM_DIR","/data/osm"))
 TILES=Path(os.getenv("GOEDEGIS_TILE_DIR","/data/tiles"))
 
+def area_geometry(payload):
+    value=payload.get("geojson")
+    if value is None:
+        area=next((a for a in read_config().get("areas",[]) if a.get("id")==payload.get("area_id")),None)
+        if area is None:raise ValueError("Area geometry unavailable for vector build")
+        value=area.get("geojson")
+    return geometry(value)
+
+def prepare_area_extract(payload,progress,cancelled):
+    source=OSM/"latest.osm.pbf"
+    if not source.is_file():raise ValueError("No OSM PBF available; download one first")
+    ident=vector_id(payload["area_id"]);geom,_=area_geometry(payload)
+    area_dir=OSM/"areas";area_dir.mkdir(parents=True,exist_ok=True)
+    polygon=area_dir/(ident+".geojson");extract=area_dir/(ident+".osm.pbf");log=area_dir/(ident+".extract.log")
+    extract.unlink(missing_ok=True)
+    polygon.write_text(json.dumps({"type":"Feature","properties":{},"geometry":geom},separators=(",",":")))
+    progress(2,"Selecting OSM data by area polygon")
+    command=["osmium","extract","--polygon",str(polygon),"--strategy","complete_ways","--set-bounds","--output",str(extract),"--overwrite",str(source)]
+    try:
+        code=_run_cancellable(command,log,int(payload.get("extract_timeout_seconds",3600)),cancelled,label="OSM area extraction")
+        if code!=0:
+            detail=log.read_text(errors="replace")[-500:] if log.exists() else "osmium extract failed"
+            raise RuntimeError(detail)
+        subprocess.run(["osmium","fileinfo","--check",str(extract)],check=True,timeout=300)
+        if not extract.is_file() or extract.stat().st_size==0:raise ValueError("OSM area extract is empty")
+        progress(15,"Area PBF ready; starting Tilemaker")
+        return extract,polygon,log
+    except Exception:
+        extract.unlink(missing_ok=True);polygon.unlink(missing_ok=True)
+        raise
+
 def build_vector_tiles(payload,progress,cancelled):
-    if not (OSM/"latest.osm.pbf").is_file():raise ValueError("No OSM PBF available; download one first")
-    ident=vector_id(payload["area_id"]);bbox=bbox_text(payload["bbox"])
+    ident=vector_id(payload["area_id"]);_,bounds=area_geometry(payload);bbox=bbox_text(payload.get("bbox",bounds))
+    extract,polygon,extract_log=prepare_area_extract(payload,progress,cancelled)
     requests=TILES/".requests";requests.mkdir(parents=True,exist_ok=True)
     request=requests/(ident+".request");done=requests/(ident+".done");failed=requests/(ident+".failed")
-    done.unlink(missing_ok=True);failed.unlink(missing_ok=True);request.write_text(bbox)
-    progress(1,"Tilemaker build requested");started=time.time();timeout=int(payload.get("timeout_seconds",21600))
-    while True:
-        if cancelled():request.unlink(missing_ok=True);raise InterruptedError("Vector build cancellation requested; an already-running Tilemaker process may finish its current build")
-        if done.exists():done.unlink(missing_ok=True);progress(100,"Vector MBTiles ready");return f"Vector map ready: {ident}.mbtiles"
-        if failed.exists():
-            reason=failed.read_text(errors="replace")[:300];failed.unlink(missing_ok=True);raise ValueError("Tilemaker failed: "+reason)
-        if time.time()-started>timeout:request.unlink(missing_ok=True);raise TimeoutError("Vector build timed out")
-        progress(min(95,2+(time.time()-started)/60),"Tilemaker is building vector tiles");time.sleep(3)
+    try:
+        done.unlink(missing_ok=True);failed.unlink(missing_ok=True);request.write_text(bbox+"\narea\n")
+        progress(16,"Tilemaker build requested for polygon-selected extract");started=time.time();timeout=int(payload.get("timeout_seconds",21600))
+        while True:
+            if cancelled():request.unlink(missing_ok=True);raise InterruptedError("Vector build cancellation requested; an already-running Tilemaker process may finish its current build")
+            if done.exists():done.unlink(missing_ok=True);progress(100,"Polygon-selected vector MBTiles ready");return f"Vector map ready: {ident}.mbtiles"
+            if failed.exists():
+                reason=failed.read_text(errors="replace")[:300];failed.unlink(missing_ok=True);raise ValueError("Tilemaker failed: "+reason)
+            if time.time()-started>timeout:request.unlink(missing_ok=True);raise TimeoutError("Vector build timed out")
+            progress(min(95,17+(time.time()-started)/60),"Tilemaker is building polygon-selected vector tiles");time.sleep(3)
+    finally:
+        extract.unlink(missing_ok=True);polygon.unlink(missing_ok=True);extract_log.unlink(missing_ok=True)
 
 def enqueue_vector_rebuilds():
     queued=0
     for area in read_config().get("areas",[]):
-        try:_,bbox=geometry(area["geojson"])
+        try:geom,bbox=geometry(area["geojson"])
         except (KeyError,ValueError):continue
         with connect() as db:active=db.execute("SELECT 1 FROM jobs WHERE type='build_vector_tiles' AND state IN ('queued','running','retry_wait','paused') AND json_extract(payload,'$.area_id')=? LIMIT 1",(area["id"],)).fetchone()
         if active:continue
-        add_job("build_vector_tiles",{"area_id":area["id"],"bbox":bbox,"timeout_seconds":21600},priority=10,max_attempts=2);queued+=1
+        add_job("build_vector_tiles",{"area_id":area["id"],"bbox":bbox,"geojson":geom,"timeout_seconds":21600},priority=10,max_attempts=2);queued+=1
     return queued
 
 def download_osm(payload,progress,cancelled):
@@ -45,7 +79,7 @@ def download_osm(payload,progress,cancelled):
     rebuilds=enqueue_vector_rebuilds() if payload.get("rebuild_vectors") else 0
     return f"OSM extract downloaded ({size//(1024*1024)} MiB); queued {rebuilds} vector rebuild(s)"
 
-def _run_cancellable(cmd,log_path,timeout,cancelled):
+def _run_cancellable(cmd,log_path,timeout,cancelled,label="OSM replication update"):
     started=time.time();log_path.parent.mkdir(parents=True,exist_ok=True)
     with log_path.open("w") as log:
         proc=subprocess.Popen(cmd,stdout=log,stderr=subprocess.STDOUT,text=True)
@@ -54,12 +88,12 @@ def _run_cancellable(cmd,log_path,timeout,cancelled):
                 proc.terminate()
                 try:proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:proc.kill();proc.wait()
-                raise InterruptedError("OSM replication update cancelled")
+                raise InterruptedError(label+" cancelled")
             if time.time()-started>timeout:
                 proc.terminate()
                 try:proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:proc.kill();proc.wait()
-                raise TimeoutError("OSM replication update timed out")
+                raise TimeoutError(label+" timed out")
             time.sleep(1)
         return proc.returncode
 
