@@ -51,7 +51,7 @@ async function refresh(){
     el('cache-source').innerHTML='';
     cfg.sources.filter(s=>s.cache_allowed && ['wms','wmts','xyz'].includes(s.kind)).forEach(s=>{const o=document.createElement('option');o.value=s.id;o.textContent=s.name;el('cache-source').append(o);});
     el('sources').innerHTML='';
-    cfg.sources.forEach(s=>{const row=document.createElement('div');row.className='item';const name=document.createElement('span');name.textContent=s.name+' · '+s.kind;const del=document.createElement('button');del.textContent='Löschen';del.onclick=async()=>{await api('sources/'+encodeURIComponent(s.id),{method:'DELETE'});refresh();};row.append(name,del);el('sources').append(row);});
+    cfg.sources.forEach(s=>{const row=document.createElement('div');row.className='item';const name=document.createElement('span');name.textContent=s.name+' · '+s.kind;const del=document.createElement('button');del.textContent='Löschen';del.onclick=async()=>{await api('sources/'+encodeURIComponent(s.id),{method:'DELETE'});refresh();};row.append(name,del);if(['wms','wmts','wfs'].includes(s.kind)){const check=document.createElement('button');check.textContent='Layer prüfen';check.onclick=async()=>{try{const result=await api('sources/'+encodeURIComponent(s.id)+'/capabilities');message((result.title||s.name)+': '+result.layers.slice(0,8).join(', '));}catch(e){message(e.message);}};row.append(check);}el('sources').append(row);});
   }catch(e){message(e.message);}
 }
 el('source-form').onsubmit=async(e)=>{
