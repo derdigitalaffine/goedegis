@@ -46,7 +46,7 @@ The source manager contains curated one-click presets for official services from
 - Verwaltungsgebiete VG250 WMS (`vg250_lan`)
 - Verwaltungsgebiete VG250 WFS (`vg250_gem`)
 
-Preset sources retain provider, attribution and licence metadata. MapLibre receives the attribution when a locally cached raster source is displayed. TopPlusOpen WMS/WMTS presets enable caching because the BKG documentation explicitly describes offline use under the required source notice. VG250 presets remain conservative with caching disabled by default; enable caching only after checking the terms for the intended use.
+Preset sources retain provider, attribution and licence metadata. MapLibre receives linked BKG/licence/data-source attribution when a locally cached TopPlusOpen raster source is displayed. TopPlusOpen WMS/WMTS presets enable caching because the BKG documentation explicitly describes offline storage under a required source notice. **For offline publication/export, the BKG also requires a date-specific TopPlusOpen data-sources reference. Goedegis does not yet generate that date-specific PDF reference automatically; the operator must add the required offline source notice.** VG250 presets remain conservative with caching disabled by default; enable caching only after checking the terms for the intended use.
 
 The WMTS preset stores the standards service URL separately from the tile-template URL. This keeps GetCapabilities discovery intact while the offline cache can request `{z}/{y}/{x}` tiles directly.
 
@@ -58,7 +58,7 @@ The WMTS preset stores the standards service URL separately from the tile-templa
 
 Implemented: responsive MapLibre UI with Playwright desktop/mobile checks, polygon areas, OGC source registry/capabilities inspection, curated official BKG presets with attribution metadata, bounded raster cache, streamed OSM PBF download, incremental PBF replication with Pyosmium, automatic/manual refresh controls, per-area OSM-to-MBTiles rebuilds, hot-reloading vector tile service, Nominatim/Valhalla/OGC Compose modules, persistent jobs with retries/pause/cancel controls, scheduled WFS sync, resource indicators and ncurses deployment.
 
-Still incomplete: incremental mutation of existing MBTiles (the synchronized PBF is incremental but affected area MBTiles are rebuilt), exact polygon clipping, coordinated Nominatim/Valhalla rebuild scheduling, full MapLibre visual style editor, automatic GeoServer publication of synced WFS layers, richer POI autocomplete/filtering and production-scale end-to-end validation.
+Still incomplete: incremental mutation of existing MBTiles (the synchronized PBF is incremental but affected area MBTiles are rebuilt), exact polygon clipping, automatic date-specific TopPlusOpen offline source-note generation, coordinated Nominatim/Valhalla rebuild scheduling, full MapLibre visual style editor, automatic GeoServer publication of synced WFS layers, richer POI autocomplete/filtering and production-scale end-to-end validation.
 
 ## Cache and job management
 
