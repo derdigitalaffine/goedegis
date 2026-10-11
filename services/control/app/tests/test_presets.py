@@ -1,5 +1,6 @@
 import tempfile,unittest
 from pathlib import Path
+from unittest.mock import patch
 
 class PresetTests(unittest.TestCase):
     def test_catalog_is_unique_and_uses_official_https_endpoints(self):
@@ -41,5 +42,18 @@ class PresetTests(unittest.TestCase):
                 main.install_preset("bkg-vg250-wfs")
                 self.assertTrue(next(p for p in main.ogc_presets() if p["id"]=="bkg-vg250-wfs")["installed"])
             finally:store.ROOT=old_root
+
+    def test_wmts_cache_prefers_preset_tile_url(self):
+        import app.cache as cache
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cache=cache.CACHE;cache.CACHE=Path(tmp)
+            source={"id":"bkg_wmts","kind":"wmts","url":"https://example.com/capabilities","tile_url":"https://tiles.example.com/{z}/{y}/{x}.png","cache_allowed":True}
+            area={"geojson":{"type":"Polygon","coordinates":[]},"zoom_min":1,"zoom_max":1}
+            try:
+                png=b"\x89PNG\r\n\x1a\nmock"
+                with patch("app.cache.geometry",return_value=(object(),None)),patch("app.cache.tiles",return_value=iter([(1,0,1)])),patch("app.cache.validate_url"),patch("app.cache.get",return_value=(png,"image/png")) as fetch:
+                    self.assertEqual(cache.run({"source":source,"area":area,"max_tiles":1}),"Cached 1 tiles")
+                self.assertEqual(fetch.call_args.args[0],"https://tiles.example.com/1/1/0.png")
+            finally:cache.CACHE=old_cache
 
 if __name__=="__main__":unittest.main()
