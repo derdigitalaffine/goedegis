@@ -46,20 +46,21 @@ def enqueue_due(now=None):
 
 
 def enqueue_osm_refresh(cfg=None,now=None,force=False):
-    """Queue one snapshot refresh; the worker fans out vector rebuilds after a successful download."""
     now=time.time() if now is None else now;cfg=read_config() if cfg is None else cfg
     settings=cfg.get("settings",{});hours=max(1,int(settings.get("osm_refresh_hours",24)))
     if not settings.get("osm_auto_refresh",False) and not force:return 0
-    url=settings.get("osm_pbf_url") or os.getenv("OSM_PBF_URL","")
-    if not url:return 0
+    pbf_url=settings.get("osm_pbf_url") or os.getenv("OSM_PBF_URL","")
+    replication_url=settings.get("osm_replication_url") or os.getenv("OSM_REPLICATION_URL","")
+    if not pbf_url:return 0
     with connect() as db:
         ensure_table(db);key="__osm_snapshot__";db.execute("BEGIN IMMEDIATE")
         row=db.execute("SELECT next_run FROM schedules WHERE source_id=?",(key,)).fetchone()
         if not force and row and row["next_run"]>now:db.execute("COMMIT");return 0
-        active=db.execute("SELECT 1 FROM jobs WHERE type='download_osm' AND state IN ('queued','running','retry_wait','paused') LIMIT 1").fetchone()
+        active=db.execute("SELECT 1 FROM jobs WHERE type IN ('download_osm','update_osm') AND state IN ('queued','running','retry_wait','paused') LIMIT 1").fetchone()
         count=0
         if not active:
-            _enqueue(db,"download_osm",{"url":url,"rebuild_vectors":True},now,priority=20,max_attempts=3,message="Scheduled OSM snapshot refresh");count=1
+            payload={"url":pbf_url,"replication_url":replication_url,"rebuild_vectors":True}
+            _enqueue(db,"update_osm",payload,now,priority=20,max_attempts=3,message="Scheduled incremental OSM refresh");count=1
         db.execute("INSERT INTO schedules(source_id,last_run,next_run) VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET last_run=excluded.last_run,next_run=excluded.next_run",(key,now,now+hours*3600))
         db.execute("COMMIT");return count
 
