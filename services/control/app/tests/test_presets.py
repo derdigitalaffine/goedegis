@@ -14,8 +14,15 @@ class PresetTests(unittest.TestCase):
             self.assertTrue(preset["license_url"].startswith("https://"))
         wmts=next(p for p in OGC_PRESETS if p["id"]=="bkg-topplusopen-wmts")
         self.assertTrue(all(token in wmts["tile_url"] for token in ("{z}","{x}","{y}")))
+        self.assertTrue(wmts["capabilities_url"].endswith("WMTSCapabilities.xml"))
         self.assertTrue(wmts["cache_allowed"])
         self.assertFalse(next(p for p in OGC_PRESETS if p["id"]=="bkg-vg250-wfs")["cache_allowed"])
+
+    def test_explicit_wmts_capabilities_document_is_used_verbatim(self):
+        from app.ogc import request_url
+        explicit="https://example.com/wmts/1.0.0/WMTSCapabilities.xml"
+        self.assertEqual(request_url(explicit,"wmts"),explicit)
+        self.assertIn("REQUEST=GetCapabilities",request_url("https://example.com/wms","wms"))
 
     def test_install_is_idempotent(self):
         import app.store as store,app.main as main
