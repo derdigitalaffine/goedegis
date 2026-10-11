@@ -35,7 +35,7 @@ el('save').onclick=async()=>{
   if(points.length<3){message('Mindestens drei Eckpunkte zeichnen');return;}
   const coordinates=[...points,points[0]];
   try{
-    await api('areas',{method:'POST',body:JSON.stringify({name:el('area-name').value||'Neues Gebiet',geojson:{type:'Polygon',coordinates:[coordinates]},zoom_min:Number(el('zmin').value),zoom_max:Number(el('zmax').value)})});
+    await api('areas',{method:'POST',body:JSON.stringify({name:el('area-name').value||'Neues Gebiet',geojson:{type:'Polygon',coordinates:[coordinates]},zoom_min:Number(el('zmin').value),zoom_max:Number(el('zmax').value),layers:el('area-layers').value.split(',').map(x=>x.trim()).filter(Boolean),osm_tags:el('area-tags').value.split(',').map(x=>x.trim()).filter(Boolean)})});
     points=[];drawing=false;updateDraft();await refresh();message('Gebiet gespeichert');
   }catch(e){message(e.message);}
 };
@@ -46,13 +46,17 @@ async function refresh(){
     if(map.getSource('areas'))map.getSource('areas').setData(shapes);
     el('areas').innerHTML='';
     cfg.areas.forEach(a=>{const row=document.createElement('div');row.className='item';const name=document.createElement('span');name.textContent=a.name;const del=document.createElement('button');del.textContent='Löschen';del.onclick=async()=>{await api('areas/'+encodeURIComponent(a.id),{method:'DELETE'});refresh();};row.append(name,del);el('areas').append(row);});
+    el('cache-area').innerHTML='';
+    cfg.areas.forEach(a=>{const o=document.createElement('option');o.value=a.id;o.textContent=a.name;el('cache-area').append(o);});
+    el('cache-source').innerHTML='';
+    cfg.sources.filter(s=>s.cache_allowed && ['wms','wmts','xyz'].includes(s.kind)).forEach(s=>{const o=document.createElement('option');o.value=s.id;o.textContent=s.name;el('cache-source').append(o);});
     el('sources').innerHTML='';
     cfg.sources.forEach(s=>{const row=document.createElement('div');row.className='item';const name=document.createElement('span');name.textContent=s.name+' · '+s.kind;const del=document.createElement('button');del.textContent='Löschen';del.onclick=async()=>{await api('sources/'+encodeURIComponent(s.id),{method:'DELETE'});refresh();};row.append(name,del);el('sources').append(row);});
   }catch(e){message(e.message);}
 }
 el('source-form').onsubmit=async(e)=>{
   e.preventDefault();
-  try{await api('sources',{method:'POST',body:JSON.stringify({name:el('source-name').value,url:el('source-url').value,kind:el('source-kind').value,layer:el('source-layer').value})});await refresh();message('Quelle gespeichert');}catch(e){message(e.message);}
+  try{await api('sources',{method:'POST',body:JSON.stringify({name:el('source-name').value,url:el('source-url').value,kind:el('source-kind').value,layer:el('source-layer').value,cache_allowed:el('source-cache').checked})});await refresh();message('Quelle gespeichert');}catch(e){message(e.message);}
 };
 el('search-form').onsubmit=async(e)=>{
   e.preventDefault();
@@ -83,7 +87,32 @@ el('queue').onclick=async()=>{
   try{const type=el('job-type').value;const url=el('job-url').value;await api('jobs',{method:'POST',body:JSON.stringify({type,payload:{url,table:el('job-table').value},priority:Number(el('priority').value)})});message('Job eingereiht');loadJobs();}catch(e){message(e.message);}
 };
 async function loadJobs(){
-  try{const list=await api('jobs');el('jobs').innerHTML='';list.slice(0,30).forEach(j=>{const d=document.createElement('div');d.className='item';d.textContent=j.type+' · '+j.state+' · '+j.message;el('jobs').append(d);});const r=await api('resources');el('resources').textContent='CPU '+r.cpu_percent+'% · RAM '+r.memory_percent+'% · Datenträger '+(r.disk_used/1e9).toFixed(1)+' GB';}catch(e){message(e.message);}
+  try{const list=await api('jobs');el('jobs').innerHTML='';list.slice(0,30).forEach(j=>{const d=document.createElement('div');d.className='item';const label=document.createElement('span');label.textContent=j.type+' · '+j.state+' · '+j.progress+'% · '+j.message;d.append(label);const actions=j.state==='running'?['cancel']:j.state==='paused'?['resume','cancel']:['queued','retry_wait'].includes(j.state)?['pause','cancel']:['failed','cancelled'].includes(j.state)?['retry']:[];actions.forEach(action=>{const b=document.createElement('button');b.textContent={pause:'Pause',resume:'Weiter',cancel:'Abbruch',retry:'Erneut'}[action];b.onclick=async()=>{try{await api('jobs/'+encodeURIComponent(j.id)+'/'+action,{method:'POST'});loadJobs();}catch(e){message(e.message);}};d.append(b);});el('jobs').append(d);});const r=await api('resources');el('resources').textContent='CPU '+r.cpu_percent+'% · RAM '+r.memory_percent+'% · Datenträger '+(r.disk_used/1e9).toFixed(1)+' GB';}catch(e){message(e.message);}
 }
 el('refresh').onclick=()=>{refresh();loadJobs();};
 loadJobs();
+
+el('cache-start').onclick=async()=>{
+  try{
+    if(!el('cache-area').value||!el('cache-source').value)throw Error('Gebiet und cachefähige Quelle auswählen');
+    const payload={area_id:el('cache-area').value,source_id:el('cache-source').value,max_tiles:Number(el('cache-limit').value)};
+    await api('jobs',{method:'POST',body:JSON.stringify({type:'tile_prewarm',payload,priority:5})});
+    message('Cache-Auftrag gestartet');loadJobs();
+  }catch(e){message(e.message);}
+};
+let offlineLayer=null;
+el('apply-style').onclick=()=>{
+  try{
+    const color=el('background-color').value;
+    if(map.getLayer('background'))map.setPaintProperty('background','background-color',color);
+    const sourceId=el('cache-source').value;
+    if(offlineLayer && map.getLayer(offlineLayer))map.removeLayer(offlineLayer);
+    if(map.getSource('offline-raster'))map.removeSource('offline-raster');
+    if(sourceId){
+      map.addSource('offline-raster',{type:'raster',tiles:[location.origin+'/control/cache/'+encodeURIComponent(sourceId)+'/{z}/{x}/{y}.png'],tileSize:256});
+      offlineLayer='offline-raster-layer';
+      map.addLayer({id:offlineLayer,type:'raster',source:'offline-raster',layout:{visibility:el('layer-visible').checked?'visible':'none'},paint:{'raster-opacity':Number(el('layer-opacity').value)/100}},'areas-fill');
+    }
+    message('Lokaler Kartenstil aktualisiert');
+  }catch(e){message(e.message);}
+};
