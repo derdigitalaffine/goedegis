@@ -7,6 +7,7 @@ from .store import read_config,write_config,add_job,jobs,connect,change_job
 from .geo import geometry
 from .network import validate_url
 from .cache import CACHE
+from .ogc import capabilities
 
 app=FastAPI(title="Goedegis internal control plane",docs_url="/control/docs",openapi_url="/control/openapi.json")
 
@@ -116,3 +117,15 @@ def resources():
     disk=shutil.disk_usage(cache)
     return {"cpu_percent":psutil.cpu_percent(interval=.1),"memory_percent":psutil.virtual_memory().percent,
             "disk_total":disk.total,"disk_used":disk.used,"disk_free":disk.free,"jobs":len(jobs())}
+
+@app.get("/control/sources/{source_id}/capabilities")
+def source_capabilities(source_id:str):
+    cfg=read_config()
+    source=next((s for s in cfg["sources"] if s["id"]==source_id),None)
+    if source is None: raise HTTPException(404,"Source not found")
+    if source["kind"] not in ("wms","wmts","wfs"):
+        raise HTTPException(422,"OGC source required")
+    try:
+        return capabilities(source["url"],source["kind"])
+    except Exception as exc:
+        raise HTTPException(502,"OGC capabilities unavailable: "+str(exc)[:160])
