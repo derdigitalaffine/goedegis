@@ -1,0 +1,10 @@
+.env
+*.pyc
+__pycache__/
+node_modules/
+dist/
+.DS_Store
+*.osm.pbf
+*.mbtiles
+*.pmtiles
+*.sqlite3

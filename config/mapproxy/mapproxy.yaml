@@ -1,0 +1,27 @@
+services:
+  demo:
+  wms:
+    md:
+      title: Goedegis local basemap cache
+  wmts:
+  tms:
+    use_grid_names: true
+layers:
+  - name: local_basemap
+    title: Local vector tile server raster style
+    sources: [local_cache]
+caches:
+  local_cache:
+    grids: [webmercator]
+    sources: [local_tiles]
+sources:
+  local_tiles:
+    type: tile
+    grid: webmercator
+    url: http://tiles:8080/styles/basic/%(z)s/%(x)s/%(y)s.png
+grids:
+  webmercator:
+    base: GLOBAL_WEBMERCATOR
+globals:
+  cache:
+    base_dir: /mapproxy/cache_data
