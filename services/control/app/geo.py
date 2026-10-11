@@ -71,9 +71,8 @@ def tiles(geom, min_zoom, max_zoom, limit=30000):
                 west,south,east,north=tile_bounds(z,x,y)
                 center=((west+east)/2,(south+north)/2)
                 corners=((west,south),(west,north),(east,south),(east,north))
-                # Conservative intersection: cache any tile whose center/corner lies in area.
-                # Edge-only intersections may be omitted; full polygon intersection is future work.
-                if contains(*center,geom) or any(contains(*p,geom) for p in corners):
+                # Conservative bbox coverage (may include extra tiles).
+                if west<=bounds[2] and east>=bounds[0] and south<=bounds[3] and north>=bounds[1]:
                     count+=1
                     if count>limit: raise ValueError("Tile limit exceeded")
                     yield z,x,y
