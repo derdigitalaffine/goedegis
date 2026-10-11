@@ -23,6 +23,7 @@ OGC_PRESETS=[
         "name":"BKG TopPlusOpen WMTS",
         "kind":"wmts",
         "url":"https://sgx.geodatenzentrum.de/wmts_topplus_open",
+        "capabilities_url":"https://sgx.geodatenzentrum.de/wmts_topplus_open/1.0.0/WMTSCapabilities.xml",
         "tile_url":"https://sgx.geodatenzentrum.de/wmts_topplus_open/tile/1.0.0/web/default/WEBMERCATOR/{z}/{y}/{x}.png",
         "layer":"web",
         "cache_allowed":True,
@@ -30,7 +31,7 @@ OGC_PRESETS=[
         "provider":"Bundesamt für Kartographie und Geodäsie (BKG)",
         "attribution":TOPPLUS_ATTRIBUTION,
         "license_url":LICENSE_URL,
-        "description":"TopPlusOpen als WMTS in Web Mercator. Für den Offline-Cache ist eine explizite Tile-Vorlage hinterlegt; der datumsbezogene Offline-Quellenvermerk bleibt zu beachten.",
+        "description":"TopPlusOpen als WMTS in Web Mercator. Für Layer-Prüfung und Offline-Cache sind die offiziellen Capabilities- bzw. Tile-URLs getrennt hinterlegt; der datumsbezogene Offline-Quellenvermerk bleibt zu beachten.",
     },
     {
         "id":"bkg-vg250-wms",
