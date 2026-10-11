@@ -49,6 +49,15 @@ services:
       postgis:
         condition: service_healthy
     restart: unless-stopped
+  scheduler:
+    build: ./services/control
+    profiles: [jobs]
+    command: ["python","-m","app.scheduler"]
+    environment:
+      GOEDEGIS_CONFIG_DIR: /data/config
+      GOEDEGIS_JOB_DB: /data/jobs/jobs.sqlite3
+    volumes: ["config_data:/data/config","jobs_data:/data/jobs"]
+    restart: unless-stopped
   tiles:
     image: maptiler/tileserver-gl:latest
     profiles: [tiles]
