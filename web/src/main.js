@@ -35,7 +35,7 @@ el('save').onclick=async()=>{
   if(points.length<3){message('Mindestens drei Eckpunkte zeichnen');return;}
   const coordinates=[...points,points[0]];
   try{
-    await api('areas',{method:'POST',body:JSON.stringify({name:el('area-name').value||'Neues Gebiet',geojson:{type:'Polygon',coordinates:[coordinates]},zoom_min:Number(el('zmin').value),zoom_max:Number(el('zmax').value)})});
+    await api('areas',{method:'POST',body:JSON.stringify({name:el('area-name').value||'Neues Gebiet',geojson:{type:'Polygon',coordinates:[coordinates]},zoom_min:Number(el('zmin').value),zoom_max:Number(el('zmax').value),layers:el('area-layers').value.split(',').map(x=>x.trim()).filter(Boolean),osm_tags:el('area-tags').value.split(',').map(x=>x.trim()).filter(Boolean)})});
     points=[];drawing=false;updateDraft();await refresh();message('Gebiet gespeichert');
   }catch(e){message(e.message);}
 };
