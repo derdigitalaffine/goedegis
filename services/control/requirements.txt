@@ -4,3 +4,4 @@ pydantic==2.11.4
 psutil==7.0.0
 httpx==0.28.1
 defusedxml==0.7.1
+osmium==4.3.1
