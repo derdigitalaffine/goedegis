@@ -99,10 +99,14 @@ def run_job(kind,payload,progress=lambda a,b:None,cancelled=lambda:False):
     if kind=="update_osm":return update_osm(payload,progress,cancelled)
     if kind=="build_vector_tiles":return build_vector_tiles(payload,progress,cancelled)
     if kind=="wfs_sync":
-        url=validate_url(payload["url"]);table=payload.get("table","wfs_import")
+        url=validate_url(payload["url"]);table=payload.get("table","wfs_import");layer=payload.get("layer","")
         if not table or not table.replace("_","").isalnum() or not table[0].isalpha():raise ValueError("Invalid table")
+        if layer and not all(c.isalnum() or c in "_.:-" for c in layer):raise ValueError("Invalid WFS layer")
         p=urlparse(os.environ["POSTGRES_DSN"]);dsn="PG:host={host} port={port} dbname={db} user={user} password={password}".format(host=p.hostname,port=p.port or 5432,db=p.path.lstrip("/"),user=unquote(p.username or ""),password=unquote(p.password or ""))
-        subprocess.run(["ogr2ogr","-f","PostgreSQL",dsn,"WFS:"+url,"-nln","synced."+table,"-overwrite","-lco","GEOMETRY_NAME=geom"],check=True,timeout=3600);return "WFS synchronized"
+        command=["ogr2ogr","-f","PostgreSQL",dsn,"WFS:"+url]
+        if layer:command.append(layer)
+        command.extend(["-nln","synced."+table,"-overwrite","-lco","GEOMETRY_NAME=geom"])
+        subprocess.run(command,check=True,timeout=3600);return "WFS synchronized"
     raise ValueError("Unknown job type")
 
 def main():
