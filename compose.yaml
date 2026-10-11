@@ -69,7 +69,7 @@ services:
     command:
       - |
         set -u
-        mkdir -p /tiles/.requests /tiles/.build
+        mkdir -p /tiles/.requests /tiles/.build /tiles/.store
         while true; do
           found=0
           for request in /tiles/.requests/*.request; do
@@ -78,15 +78,17 @@ services:
             id="$$(basename "$$request" .request)"
             bbox="$$(cat "$$request")"
             rm -f "/tiles/.build/$$id.mbtiles" "/tiles/.requests/$$id.done" "/tiles/.requests/$$id.failed"
+            rm -rf "/tiles/.store/$$id"
             if [ ! -s /osm/latest.osm.pbf ]; then
               echo "OSM PBF missing" > "/tiles/.requests/$$id.failed"
-            elif /usr/src/app/tilemaker /osm/latest.osm.pbf --output "/tiles/.build/$$id.mbtiles" --bbox "$$bbox" --config /goedegis-tilemaker/config.json --process /usr/src/app/resources/process-openmaptiles.lua; then
+            elif /usr/src/app/tilemaker /osm/latest.osm.pbf --output "/tiles/.build/$$id.mbtiles" --bbox "$$bbox" --store "/tiles/.store/$$id" --config /goedegis-tilemaker/config.json --process /usr/src/app/resources/process-openmaptiles.lua; then
               mv -f "/tiles/.build/$$id.mbtiles" "/tiles/$$id.mbtiles"
               echo "ok" > "/tiles/.requests/$$id.done"
             else
               rm -f "/tiles/.build/$$id.mbtiles"
               echo "tilemaker failed" > "/tiles/.requests/$$id.failed"
             fi
+            rm -rf "/tiles/.store/$$id"
             rm -f "$$request"
           done
           [ "$$found" -eq 1 ] || sleep 2
