@@ -9,6 +9,7 @@ from .geo import geometry
 from .network import validate_url
 from .cache import CACHE
 from .ogc import capabilities
+from .presets import OGC_PRESETS,get_preset
 from .scheduler import status as schedule_status,enqueue_due,enqueue_osm_refresh,reset_osm_schedule
 
 TILES=Path(os.getenv("GOEDEGIS_TILE_DIR","/data/tiles"))
@@ -21,7 +22,9 @@ class Area(BaseModel):
 class Source(BaseModel):
     name:str=Field(min_length=1,max_length=100);url:str
     kind:str=Field(pattern="^(wms|wmts|wfs|osm|xyz)$");enabled:bool=True;cache_allowed:bool=False
-    interval_minutes:int=Field(default=1440,ge=15);layer:str=""
+    interval_minutes:int=Field(default=1440,ge=15);layer:str="";tile_url:str=""
+    provider:str=Field(default="",max_length=200);attribution:str=Field(default="",max_length=500)
+    license_url:str=Field(default="",max_length=1000);description:str=Field(default="",max_length=1000);preset_id:str=Field(default="",max_length=100)
 class JobRequest(BaseModel):
     type:str=Field(pattern="^(wfs_sync|tile_prewarm|download_osm|update_osm|build_vector_tiles)$");payload:dict=Field(default_factory=dict)
     priority:int=Field(default=0,ge=-100,le=100);max_attempts:int=Field(default=3,ge=1,le=10)
@@ -46,6 +49,19 @@ def vector_payload(area_id):
 def effective_osm_settings():
     settings=read_config().get("settings",{})
     return {"osm_auto_refresh":bool(settings.get("osm_auto_refresh",False)),"osm_refresh_hours":int(settings.get("osm_refresh_hours",24)),"osm_pbf_url":settings.get("osm_pbf_url") or os.getenv("OSM_PBF_URL",""),"osm_replication_url":settings.get("osm_replication_url") or os.getenv("OSM_REPLICATION_URL","")}
+
+def validate_source_urls(source):
+    validate_url(source.url.replace("{z}","0").replace("{x}","0").replace("{y}","0"))
+    if source.tile_url:validate_url(source.tile_url.replace("{z}","0").replace("{x}","0").replace("{y}","0"))
+    if source.license_url:validate_url(source.license_url)
+
+def install_preset(preset_id):
+    preset=get_preset(preset_id)
+    if preset is None:raise HTTPException(404,"OGC preset not found")
+    data=read_config();existing=next((s for s in data["sources"] if s.get("preset_id")==preset_id),None)
+    if existing:return existing
+    entry={"id":str(uuid.uuid4()),"enabled":True,"preset_id":preset_id,**{k:v for k,v in preset.items() if k!="id"}}
+    data["sources"].append(entry);write_config(data);return entry
 
 @app.get("/control/health")
 def health():return {"ok":True,"service":"goedegis-control"}
@@ -84,9 +100,15 @@ def vector_maps():
     for path in sorted(TILES.glob("area-*.mbtiles")):
         stat=path.stat();result.append({"id":path.stem,"size":stat.st_size,"modified":stat.st_mtime})
     return result
+@app.get("/control/presets/ogc")
+def ogc_presets():
+    installed={s.get("preset_id") for s in read_config().get("sources",[]) if s.get("preset_id")}
+    return [{**preset,"installed":preset["id"] in installed} for preset in OGC_PRESETS]
+@app.post("/control/presets/ogc/{preset_id}")
+def add_ogc_preset(preset_id:str):return install_preset(preset_id)
 @app.post("/control/sources")
 def create_source(source:Source):
-    try:validate_url(source.url.replace("{z}","0").replace("{x}","0").replace("{y}","0"))
+    try:validate_source_urls(source)
     except ValueError as exc:raise HTTPException(422,str(exc))
     data=read_config();entry={"id":str(uuid.uuid4()),**source.model_dump()};data["sources"].append(entry);write_config(data);return entry
 @app.delete("/control/sources/{source_id}")
